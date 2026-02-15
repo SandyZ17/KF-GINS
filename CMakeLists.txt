@@ -1,40 +1,61 @@
 cmake_minimum_required(VERSION 3.10)
-project(KF-GINS)
+project(kf_gins)
 
-set(CMAKE_CXX_STANDARD 14)
-
-set(EXECUTABLE_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/bin)
-set(LIBRARY_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/lib)
-
-if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
-    add_definitions( -D_USE_MATH_DEFINES=True)
-    add_compile_options("$<$<C_COMPILER_ID:MSVC>:/utf-8>")
-    add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
-else()
-    set(CMAKE_CXX_FLAGS "-Wno-unused-result")
+if(NOT CMAKE_CXX_STANDARD)
+    set(CMAKE_CXX_STANDARD 14)
 endif()
 
-file(GLOB_RECURSE SOURCE
-        src/kf_gins.cpp
-        src/fileio/fileloader.cc
-        src/fileio/filesaver.cc
-        src/kf-gins/gi_engine.cpp
-        src/kf-gins/insmech.cpp)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
 
-include_directories(${PROJECT_SOURCE_DIR}/src)
-add_executable(${PROJECT_NAME} ${SOURCE})
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(eigen3_cmake_module REQUIRED)
+find_package(Eigen3 REQUIRED)
 
-# Eigen3
-include_directories(ThirdParty/eigen-3.3.9)
+add_executable(kf_gins_node
+    src/kf_gins_node.cpp
+    src/kf-gins/gi_engine.cpp
+    src/kf-gins/insmech.cpp
+)
 
-# yaml-cpp-0.7.0
-add_subdirectory(ThirdParty/yaml-cpp-0.7.0)
-target_link_libraries(${PROJECT_NAME} yaml-cpp)
+target_include_directories(kf_gins_node PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+)
 
-# abseil
-set(ABSL_PROPAGATE_CXX_STD true)
-add_subdirectory(ThirdParty/abseil-cpp-20220623.1)
-target_link_libraries(${PROJECT_NAME}
-        absl::strings
-        absl::str_format
-        absl::time)
+target_link_libraries(kf_gins_node
+    Eigen3::Eigen
+)
+
+ament_target_dependencies(kf_gins_node
+    rclcpp
+    sensor_msgs
+    nav_msgs
+    geometry_msgs
+    tf2
+    tf2_ros
+)
+
+install(TARGETS kf_gins_node
+    DESTINATION lib/${PROJECT_NAME}
+)
+
+install(DIRECTORY config
+    DESTINATION share/${PROJECT_NAME}
+)
+
+# install(DIRECTORY dataset
+#     DESTINATION share/${PROJECT_NAME}
+# )
+
+install(DIRECTORY launch
+    DESTINATION share/${PROJECT_NAME}
+)
+
+ament_package()

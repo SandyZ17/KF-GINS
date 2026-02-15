@@ -73,6 +73,17 @@ def plotNavresult(navresult_filepath):
     plt.grid()
     plt.tight_layout()
 
+    # 3D path (East, North, Up)
+    fig = plt.figure('3D position')
+    ax = fig.add_subplot(111, projection='3d')
+    ax.plot(pos[:, 2], pos[:, 1], navresult[:, 4])
+    ax.set_xlabel('East [m]')
+    ax.set_ylabel('North [m]')
+    ax.set_zlabel('Up [m]')
+    ax.set_title('3D Position')
+    ax.grid(True)
+    plt.tight_layout()
+
     plt.figure()
     plt.plot(navresult[:, 1], navresult[:, 5:8])
     plt.legend(['North', 'East', 'Down'])

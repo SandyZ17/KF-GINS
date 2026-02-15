@@ -1,0 +1,73 @@
+kf_gins_node:
+  ros__parameters:
+    # 订阅话题
+    imu_topic: "/imu/data" # sensor_msgs/Imu
+    gps_topic: "/gps/fix" # sensor_msgs/NavSatFix
+
+    # 发布话题
+    odom_topic: "/kf_gins/odom" # nav_msgs/Odometry
+    path_topic: "/kf_gins/path" # nav_msgs/Path
+    navsat_topic: "/kf_gins/gps/fix" # sensor_msgs/NavSatFix (融合后BLH)
+
+    # TF/坐标系
+    frame_id: "map" # 里程计所在坐标系
+    path_frame_id: "map" # Path 坐标系
+    navsat_frame_id: "map" # NavSatFix 坐标系
+    child_frame_id: "base_link" # 车体坐标系
+    publish_tf: true # 发布 TF
+
+    # 路径输出
+    publish_path: true # 发布 nav_msgs/Path
+    path_publish_rate: 10.0 # Path 发布频率(Hz), <=0 表示每帧都发
+    path_max_size: 2000 # 轨迹点上限（<=0 表示不裁剪）
+    odom_publish_rate: 30.0 # Odom 发布频率(Hz), <=0 表示每帧都发
+    publish_navsat: true # 发布融合后的 sensor_msgs/NavSatFix
+
+    # 输出坐标系
+    output_enu: true # true: ENU (ROS 标准) / false: NED
+
+    # IMU 数据轴向
+    imu_in_flu: false # 数据集 IMU 为 FRD
+
+    # IMU 时间/频率
+    imu_rate: 100.0 # IMU 期望频率 (Hz)
+    max_imu_dt: 0.1 # 异常时间间隔阈值（秒）
+
+    # 数据时间窗口
+    use_absolute_time: false # 按消息时间戳过滤
+    start_time: 50.0 # dataset/kf-gins.yaml 中的 starttime
+    end_time: -1.0 # -1 表示不限制
+
+    # 队列缓存
+    max_queue_size: 2000 # IMU/GNSS 缓存队列长度
+
+    # GNSS 噪声
+    use_navsatfix_covariance: true # 优先使用 NavSatFix 协方差
+    gnss_std: [1.0, 1.0, 2.0] # 未提供协方差时的 std (m)
+
+    # KF-GINS 参数（来自 dataset/kf-gins.yaml）
+    initpos: [30.4447873701, 114.4718632047, 20.899]
+    initvel: [0.0, 0.0, 0.0]
+    initatt: [0.85421502, -2.03480295, 185.70235133]
+
+    initgyrbias: [0.0, 0.0, 0.0] # [deg/h]
+    initaccbias: [0.0, 0.0, 0.0] # [mGal]
+    initgyrscale: [0.0, 0.0, 0.0] # [ppm]
+    initaccscale: [0.0, 0.0, 0.0] # [ppm]
+
+    initposstd: [0.005, 0.004, 0.008] # [m]
+    initvelstd: [0.003, 0.004, 0.004] # [m/s]
+    initattstd: [0.003, 0.003, 0.023] # [deg]
+
+    # IMU 噪声参数
+    imunoise:
+      arw: [0.003, 0.003, 0.003] # [deg/sqrt(hr)]
+      vrw: [0.03, 0.03, 0.03] # [m/s/sqrt(hr)]
+      gbstd: [0.027, 0.027, 0.027] # [deg/hr]
+      abstd: [15.0, 15.0, 15.0] # [mGal]
+      gsstd: [300.0, 300.0, 300.0] # [ppm]
+      asstd: [300.0, 300.0, 300.0] # [ppm]
+      corrtime: 4.0 # [hr]
+
+    # 天线杆臂 (IMU 前右下, FRD)
+    antlever: [0.136, -0.301, -0.184] # [m]
