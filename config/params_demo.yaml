@@ -5,7 +5,8 @@ kf_gins_node:
     gps_topic: "/gps/fix" # sensor_msgs/NavSatFix
 
     # 发布话题
-    odom_topic: "/kf_gins/odom" # nav_msgs/Odometry
+    odom_topic: "/kf_gins/odom_pred" # nav_msgs/Odometry (pred)
+    odom_fused_topic: "/kf_gins/odom_fused" # nav_msgs/Odometry (fused)
     path_topic: "/kf_gins/path" # nav_msgs/Path
     navsat_topic: "/kf_gins/gps/fix" # sensor_msgs/NavSatFix (融合后BLH)
 
@@ -19,6 +20,7 @@ kf_gins_node:
     # 路径输出
     publish_path: true # 发布 nav_msgs/Path
     path_publish_rate: 5.0 # Path 发布频率(Hz), <=0 表示每帧都发
+    input_stale_timeout: 0.5 # 输入超时(秒), 超时后停止预测发布 odom/path
     path_max_size: 2000 # 轨迹点上限（<=0 表示不裁剪）
     odom_publish_rate: 30.0 # Odom 发布频率(Hz), <=0 表示每帧都发
     navsat_publish_rate: 30.0 # NavSatFix 发布频率(Hz), <=0 表示跟随 odom 发布频率
@@ -33,8 +35,10 @@ kf_gins_node:
     # IMU 时间/频率
     imu_rate: 100.0 # IMU 期望频率 (Hz)
     max_imu_dt: 0.1 # 异常时间间隔阈值（秒）
+    max_imu_ahead: 1.0 # 允许IMU超前GNSS处理的时间(秒), 减少1Hz GNSS导致的输出卡顿
 
     # 数据时间窗口
+    use_wall_time_stamp: false
     use_absolute_time: false # 按消息时间戳过滤
     start_time: 50.0 # dataset/kf-gins.yaml 中的 starttime
     end_time: -1.0 # -1 表示不限制

@@ -9,6 +9,7 @@
 #include <string>
 
 #include <Eigen/Dense>
+#include <Eigen/Geometry>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <nav_msgs/msg/path.hpp>
@@ -53,6 +54,7 @@ public:
         imu_topic_                = declare_parameter<std::string>("imu_topic", "/imu/data");
         gps_topic_                = declare_parameter<std::string>("gps_topic", "/gps/fix");
         odom_topic_               = declare_parameter<std::string>("odom_topic", "/kf_gins/odom");
+        odom_fused_topic_         = declare_parameter<std::string>("odom_fused_topic", "/kf_gins/odom_fused");
         path_topic_               = declare_parameter<std::string>("path_topic", "/kf_gins/path");
         navsat_topic_             = declare_parameter<std::string>("navsat_topic", "/kf_gins/gps/fix");
         frame_id_                 = declare_parameter<std::string>("frame_id", "map");
@@ -66,6 +68,7 @@ public:
         odom_publish_rate_        = declare_parameter<double>("odom_publish_rate", 0.0);
         navsat_publish_rate_      = declare_parameter<double>("navsat_publish_rate", -1.0);
         path_publish_rate_        = declare_parameter<double>("path_publish_rate", 10.0);
+        input_stale_timeout_      = declare_parameter<double>("input_stale_timeout", 0.5);
         output_enu_               = declare_parameter<bool>("output_enu", true);
         imu_in_flu_               = declare_parameter<bool>("imu_in_flu", true);
         imu_rate_                 = declare_parameter<double>("imu_rate", 200.0);
@@ -77,6 +80,7 @@ public:
         end_time_                 = declare_parameter<double>("end_time", -1.0);
         use_absolute_time_        = declare_parameter<bool>("use_absolute_time", false);
         max_imu_ahead_            = declare_parameter<double>("max_imu_ahead", 0.0);
+        use_wall_time_stamp_      = declare_parameter<bool>("use_wall_time_stamp", true);
 
         if (gnss_std_.size() != 3) {
             RCLCPP_WARN(get_logger(), "Parameter 'gnss_std' must be 3 elements. Using default [1,1,2].");
@@ -92,7 +96,8 @@ public:
         origin_blh_ = options_.initstate.pos;
         giengine_   = std::make_unique<GIEngine>(options_);
 
-        odom_pub_ = create_publisher<nav_msgs::msg::Odometry>(odom_topic_, 10);
+        odom_pub_       = create_publisher<nav_msgs::msg::Odometry>(odom_topic_, 10);
+        odom_fused_pub_ = create_publisher<nav_msgs::msg::Odometry>(odom_fused_topic_, 10);
         if (publish_path_) {
             path_pub_ = create_publisher<nav_msgs::msg::Path>(path_topic_, 10);
             if (path_frame_id_.empty()) {
@@ -110,24 +115,32 @@ public:
             tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(*this);
         }
 
+        sensor_cb_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+        timer_cb_group_  = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+
         if (odom_publish_rate_ > 0.0) {
             const auto period = std::chrono::duration<double>(1.0 / odom_publish_rate_);
-            odom_timer_ = create_wall_timer(period, std::bind(&KfGinsNode::publishOdomTimer, this));
+            odom_timer_ = create_wall_timer(period, std::bind(&KfGinsNode::publishOdomTimer, this), timer_cb_group_);
         }
         if (publish_navsat_ && navsat_publish_rate_ > 0.0) {
             const auto period = std::chrono::duration<double>(1.0 / navsat_publish_rate_);
-            navsat_timer_ = create_wall_timer(period, std::bind(&KfGinsNode::publishNavsatTimer, this));
+            navsat_timer_ =
+                create_wall_timer(period, std::bind(&KfGinsNode::publishNavsatTimer, this), timer_cb_group_);
         }
         if (publish_path_ && path_publish_rate_ > 0.0) {
             const auto period = std::chrono::duration<double>(1.0 / path_publish_rate_);
-            path_timer_ = create_wall_timer(period, std::bind(&KfGinsNode::publishPathTimer, this));
+            path_timer_ = create_wall_timer(period, std::bind(&KfGinsNode::publishPathTimer, this), timer_cb_group_);
         }
 
-        imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
-            imu_topic_, rclcpp::SensorDataQoS(), std::bind(&KfGinsNode::imuCallback, this, std::placeholders::_1));
+        rclcpp::SubscriptionOptions sensor_sub_options;
+        sensor_sub_options.callback_group = sensor_cb_group_;
+        imu_sub_                          = create_subscription<sensor_msgs::msg::Imu>(
+            imu_topic_, rclcpp::SensorDataQoS(), std::bind(&KfGinsNode::imuCallback, this, std::placeholders::_1),
+            sensor_sub_options);
 
         gnss_sub_ = create_subscription<sensor_msgs::msg::NavSatFix>(
-            gps_topic_, rclcpp::SensorDataQoS(), std::bind(&KfGinsNode::gnssCallback, this, std::placeholders::_1));
+            gps_topic_, rclcpp::SensorDataQoS(), std::bind(&KfGinsNode::gnssCallback, this, std::placeholders::_1),
+            sensor_sub_options);
     }
 
 private:
@@ -316,6 +329,12 @@ private:
         sample.imu.dvel   = acc * dt;
         sample.imu.odovel = 0.0;
 
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            last_input_wall_time_ = this->now();
+            have_input_           = true;
+        }
+
         imu_queue_.push_back(sample);
         trimQueue(imu_queue_);
         process();
@@ -367,6 +386,12 @@ private:
         }
         if (!used_cov) {
             sample.gnss.std = Eigen::Vector3d(gnss_std_[0], gnss_std_[1], gnss_std_[2]);
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            last_input_wall_time_ = this->now();
+            have_input_           = true;
         }
 
         gnss_queue_.push_back(sample);
@@ -489,13 +514,43 @@ private:
         odom.twist.twist.linear.y = vel_out.y();
         odom.twist.twist.linear.z = vel_out.z();
 
+        const auto out_stamp = selectOutputStamp(stamp);
+        if (odom_fused_pub_) {
+            nav_msgs::msg::Odometry odom_fused = odom;
+            odom_fused.header.stamp            = out_stamp;
+            odom_fused_pub_->publish(odom_fused);
+        }
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
-            last_odom_ = odom;
-            last_pose_.header.stamp = stamp;
+            // Estimate body angular velocity from two consecutive fused attitudes.
+            if (have_odom_) {
+                const double dt = (out_stamp - last_fused_time_).seconds();
+                if (dt > 1e-6) {
+                    Eigen::Quaterniond q_prev(last_odom_.pose.pose.orientation.w, last_odom_.pose.pose.orientation.x,
+                                              last_odom_.pose.pose.orientation.y, last_odom_.pose.pose.orientation.z);
+                    Eigen::Quaterniond q_curr(odom.pose.pose.orientation.w, odom.pose.pose.orientation.x,
+                                              odom.pose.pose.orientation.y, odom.pose.pose.orientation.z);
+                    q_prev.normalize();
+                    q_curr.normalize();
+                    Eigen::Quaterniond dq = q_prev.conjugate() * q_curr;
+                    if (dq.w() < 0.0) {
+                        dq.coeffs() *= -1.0;
+                    }
+                    const Eigen::AngleAxisd aa(dq);
+                    last_fused_angular_vel_ = aa.axis() * (aa.angle() / dt);
+                } else {
+                    last_fused_angular_vel_.setZero();
+                }
+            } else {
+                last_fused_angular_vel_.setZero();
+            }
+
+            last_odom_                 = odom;
+            last_pose_.header.stamp    = stamp;
             last_pose_.header.frame_id = path_frame_id_;
-            last_pose_.pose = odom.pose.pose;
-            have_odom_ = true;
+            last_pose_.pose            = odom.pose.pose;
+            last_fused_time_           = out_stamp;
+            have_odom_                 = true;
         }
 
         if (publish_navsat_ && navsat_pub_) {
@@ -521,23 +576,73 @@ private:
         }
     }
 
-    void publishOdomTimer() {
+    bool getPredictedOdomAt(const rclcpp::Time &target_time, nav_msgs::msg::Odometry &odom_out) {
         nav_msgs::msg::Odometry odom;
-        bool have = false;
+        rclcpp::Time fused_time;
+        rclcpp::Time input_wall_time;
+        Eigen::Vector3d omega_body = Eigen::Vector3d::Zero();
+        bool have                  = false;
+        bool have_input            = false;
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
             have = have_odom_;
             if (have) {
-                odom = last_odom_;
+                odom       = last_odom_;
+                fused_time = last_fused_time_;
+                omega_body = last_fused_angular_vel_;
             }
+            have_input      = have_input_;
+            input_wall_time = last_input_wall_time_;
         }
         if (!have) {
+            return false;
+        }
+        if (!have_input) {
+            return false;
+        }
+        if ((this->now() - input_wall_time).seconds() > input_stale_timeout_) {
+            return false;
+        }
+
+        const double dt_pred = (target_time - fused_time).seconds();
+        if (dt_pred > 0.0) {
+            // Position extrapolation with constant linear velocity.
+            odom.pose.pose.position.x += odom.twist.twist.linear.x * dt_pred;
+            odom.pose.pose.position.y += odom.twist.twist.linear.y * dt_pred;
+            odom.pose.pose.position.z += odom.twist.twist.linear.z * dt_pred;
+
+            // Attitude extrapolation with constant body angular velocity.
+            const double omega_norm = omega_body.norm();
+            if (omega_norm > 1e-8) {
+                Eigen::Quaterniond q(odom.pose.pose.orientation.w, odom.pose.pose.orientation.x,
+                                     odom.pose.pose.orientation.y, odom.pose.pose.orientation.z);
+                q.normalize();
+                const double angle = omega_norm * dt_pred;
+                Eigen::AngleAxisd aa(angle, omega_body / omega_norm);
+                q = q * Eigen::Quaterniond(aa);
+                q.normalize();
+                odom.pose.pose.orientation.w = q.w();
+                odom.pose.pose.orientation.x = q.x();
+                odom.pose.pose.orientation.y = q.y();
+                odom.pose.pose.orientation.z = q.z();
+            }
+        }
+
+        odom.header.stamp = target_time;
+        odom_out          = odom;
+        return true;
+    }
+
+    void publishOdomTimer() {
+        const auto now_stamp = selectTimerTargetStamp();
+        nav_msgs::msg::Odometry odom;
+        if (!getPredictedOdomAt(now_stamp, odom)) {
             return;
         }
         odom_pub_->publish(odom);
         if (publish_tf_ && tf_broadcaster_) {
             geometry_msgs::msg::TransformStamped tf;
-            tf.header.stamp            = odom.header.stamp;
+            tf.header.stamp            = now_stamp;
             tf.header.frame_id         = frame_id_;
             tf.child_frame_id          = child_frame_id_;
             tf.transform.translation.x = odom.pose.pose.position.x;
@@ -564,23 +669,24 @@ private:
         if (!have || !navsat_pub_) {
             return;
         }
+        navsat.header.stamp = selectTimerTargetStamp();
         navsat_pub_->publish(navsat);
     }
 
     void publishPathTimer() {
-        geometry_msgs::msg::PoseStamped pose;
-        bool have = false;
-        {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            have = have_odom_;
-            if (have) {
-                pose = last_pose_;
-            }
-        }
-        if (!have || !path_pub_) {
+        if (!path_pub_) {
             return;
         }
-        path_msg_.header.stamp = pose.header.stamp;
+        const auto now_stamp = selectTimerTargetStamp();
+        nav_msgs::msg::Odometry odom;
+        if (!getPredictedOdomAt(now_stamp, odom)) {
+            return;
+        }
+        geometry_msgs::msg::PoseStamped pose;
+        pose.header.stamp      = now_stamp;
+        pose.header.frame_id   = path_frame_id_;
+        pose.pose              = odom.pose.pose;
+        path_msg_.header.stamp = now_stamp;
         path_msg_.poses.push_back(pose);
         if (path_max_size_ > 0 && static_cast<int>(path_msg_.poses.size()) > path_max_size_) {
             const auto drop = path_msg_.poses.size() - static_cast<size_t>(path_max_size_);
@@ -589,10 +695,26 @@ private:
         path_pub_->publish(path_msg_);
     }
 
+    rclcpp::Time selectOutputStamp(const rclcpp::Time &measurement_stamp) const {
+        return use_wall_time_stamp_ ? this->now() : measurement_stamp;
+    }
+
+    rclcpp::Time selectTimerTargetStamp() {
+        if (use_wall_time_stamp_) {
+            return this->now();
+        }
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (have_odom_) {
+            return last_fused_time_;
+        }
+        return rclcpp::Time(0, 0, RCL_SYSTEM_TIME);
+    }
+
 private:
     std::string imu_topic_;
     std::string gps_topic_;
     std::string odom_topic_;
+    std::string odom_fused_topic_;
     std::string path_topic_;
     std::string navsat_topic_;
     std::string frame_id_;
@@ -606,6 +728,7 @@ private:
     double odom_publish_rate_{0.0};
     double navsat_publish_rate_{-1.0};
     double path_publish_rate_{10.0};
+    double input_stale_timeout_{0.5};
     bool output_enu_{true};
     bool imu_in_flu_{true};
     double imu_rate_{200.0};
@@ -617,6 +740,7 @@ private:
     double end_time_{-1.0};
     bool use_absolute_time_{false};
     double max_imu_ahead_{0.0};
+    bool use_wall_time_stamp_{true};
 
     double base_time_{0.0};
     bool base_time_set_{false};
@@ -634,6 +758,7 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
     rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr gnss_sub_;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
+    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_fused_pub_;
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
     rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr navsat_pub_;
     nav_msgs::msg::Path path_msg_;
@@ -643,19 +768,28 @@ private:
     nav_msgs::msg::Odometry last_odom_;
     sensor_msgs::msg::NavSatFix last_navsat_;
     geometry_msgs::msg::PoseStamped last_pose_;
+    rclcpp::Time last_fused_time_{0, 0, RCL_SYSTEM_TIME};
+    rclcpp::Time last_input_wall_time_{0, 0, RCL_SYSTEM_TIME};
+    Eigen::Vector3d last_fused_angular_vel_{Eigen::Vector3d::Zero()};
     bool have_odom_{false};
     bool have_navsat_{false};
+    bool have_input_{false};
 
     std::mutex state_mutex_;
 
     rclcpp::TimerBase::SharedPtr odom_timer_;
     rclcpp::TimerBase::SharedPtr navsat_timer_;
     rclcpp::TimerBase::SharedPtr path_timer_;
+    rclcpp::CallbackGroup::SharedPtr sensor_cb_group_;
+    rclcpp::CallbackGroup::SharedPtr timer_cb_group_;
 };
 
 int main(int argc, char **argv) {
     rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<KfGinsNode>());
+    auto node = std::make_shared<KfGinsNode>();
+    rclcpp::executors::MultiThreadedExecutor executor;
+    executor.add_node(node);
+    executor.spin();
     rclcpp::shutdown();
     return 0;
 }

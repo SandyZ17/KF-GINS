@@ -5,13 +5,14 @@ kf_gins_node:
     gps_topic: "/gps/fix" # sensor_msgs/NavSatFix
 
     # 发布话题
-    odom_topic: "/kf_gins/odom" # nav_msgs/Odometry
+    odom_topic: "/kf_gins/odom" # nav_msgs/Odometry (pred)
+    odom_fused_topic: "/kf_gins/odom_fused" # nav_msgs/Odometry (fused)
     path_topic: "/kf_gins/path" # nav_msgs/Path
     navsat_topic: "/kf_gins/gps/fix" # sensor_msgs/NavSatFix (融合后BLH)
 
     # TF/坐标系
     frame_id: "map" # 里程计所在坐标系
-    path_frame_id: "map" # Path 坐标系
+    path_frame_id: "map" # Path 坐标系ss
     navsat_frame_id: "map" # NavSatFix 坐标系
     child_frame_id: "base_link" # 车体坐标系
     publish_tf: true # 发布 TF
@@ -19,6 +20,7 @@ kf_gins_node:
     # 路径输出
     publish_path: true # 发布 nav_msgs/Path
     path_publish_rate: 10.0 # Path 发布频率(Hz), <=0 表示每帧都发
+    input_stale_timeout: 0.5 # 输入超时(秒), 超时后停止预测发布 odom/path
     path_max_size: 2000 # 轨迹点上限（<=0 表示不裁剪）
     odom_publish_rate: 30.0 # Odom 发布频率(Hz), <=0 表示每帧都发
     publish_navsat: true # 发布融合后的 sensor_msgs/NavSatFix
