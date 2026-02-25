@@ -1,0 +1,17 @@
+kf_gins_node:
+  ros__parameters:
+    # Filter scheme enum (string form)
+    # Supported enum names in code:
+    #   ESKF, UKF, SR_UKF, ADAPTIVE_UKF, ROBUST_UKF
+    # Current implementation status:
+    #   only ESKF is implemented; other options currently fallback to ESKF
+    filter_scheme: "ESKF"
+
+    # Future UKF-family experiment parameters (reserved for paper ablation)
+    # These keys are placeholders so you can keep one experiment config file.
+    ukf_alpha: 1.0e-3
+    ukf_beta: 2.0
+    ukf_kappa: 0.0
+    adaptive_q_scale: 1.0
+    adaptive_r_scale: 1.0
+    robust_huber_delta: 2.5

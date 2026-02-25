@@ -29,6 +29,47 @@
 
 #include "common/angle.h"
 
+enum class FilterScheme : int {
+    ESKF = 0,
+    UKF = 1,
+    SR_UKF = 2,
+    ADAPTIVE_UKF = 3,
+    ROBUST_UKF = 4,
+};
+
+inline const char *filterSchemeName(FilterScheme scheme) {
+    switch (scheme) {
+    case FilterScheme::ESKF:
+        return "ESKF";
+    case FilterScheme::UKF:
+        return "UKF";
+    case FilterScheme::SR_UKF:
+        return "SR_UKF";
+    case FilterScheme::ADAPTIVE_UKF:
+        return "ADAPTIVE_UKF";
+    case FilterScheme::ROBUST_UKF:
+        return "ROBUST_UKF";
+    default:
+        return "UNKNOWN";
+    }
+}
+
+enum class GnssPosMeasMode : int {
+    XYZ = 0,
+    XY = 1,
+};
+
+inline const char *gnssPosMeasModeName(GnssPosMeasMode mode) {
+    switch (mode) {
+    case GnssPosMeasMode::XYZ:
+        return "xyz";
+    case GnssPosMeasMode::XY:
+        return "xy";
+    default:
+        return "unknown";
+    }
+}
+
 typedef struct Attitude {
     Eigen::Quaterniond qbn;
     Eigen::Matrix3d cbn;
@@ -80,6 +121,22 @@ typedef struct GINSOptions {
     // 安装参数
     // install parameters
     Eigen::Vector3d antlever = {0, 0, 0};
+
+    // 滤波方案枚举（当前仅ESKF已实现，其余作为实验扩展入口）
+    // filter scheme enum (only ESKF is implemented currently)
+    FilterScheme filter_scheme = FilterScheme::ESKF;
+
+    // UKF 参数（用于实验对比）
+    // UKF parameters (for experiment comparison)
+    double ukf_alpha = 1.0e-3;
+    double ukf_beta = 2.0;
+    double ukf_kappa = 0.0;
+
+    // GNSS NIS gating (applies to measurement update in current implementation)
+    GnssPosMeasMode gnss_update_mode = GnssPosMeasMode::XYZ;
+    GnssPosMeasMode gnss_nis_gate_mode = GnssPosMeasMode::XYZ;
+    bool gnss_nis_gate_enable = false;
+    double gnss_nis_gate_threshold = 11.34; // chi-square 99% for 3D position measurement
 
     void print_options() {
         std::cout << "---------------KF-GINS Options:---------------" << std::endl;
@@ -133,6 +190,15 @@ typedef struct GINSOptions {
         // 打印GNSS天线杆臂
         // print GNSS antenna leverarm
         std::cout << " - Antenna leverarm: " << antlever.transpose() << " [m] " << std::endl << std::endl;
+        std::cout << " - Filter scheme: " << filterSchemeName(filter_scheme) << std::endl << std::endl;
+        std::cout << " - UKF params: alpha=" << ukf_alpha << ", beta=" << ukf_beta << ", kappa=" << ukf_kappa
+                  << std::endl
+                  << std::endl;
+        std::cout << " - GNSS NIS gate: " << (gnss_nis_gate_enable ? "enabled" : "disabled")
+                  << ", threshold=" << gnss_nis_gate_threshold
+                  << ", update_mode=" << gnssPosMeasModeName(gnss_update_mode)
+                  << ", gate_mode=" << gnssPosMeasModeName(gnss_nis_gate_mode) << std::endl
+                  << std::endl;
     }
 
 } GINSOptions;

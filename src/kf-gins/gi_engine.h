@@ -23,6 +23,7 @@
 #ifndef GI_ENGINE_H
 #define GI_ENGINE_H
 
+#include <cstdint>
 #include <Eigen/Dense>
 #include <vector>
 
@@ -119,6 +120,14 @@ public:
      * */
     NavState getNavState();
 
+    double getLastNIS() const {
+        return last_nis_;
+    }
+
+    uint64_t getLastNISSeq() const {
+        return last_nis_seq_;
+    }
+
     /**
      * @brief 获取当前状态协方差
      *        get current state covariance
@@ -206,6 +215,39 @@ private:
     void EKFUpdate(Eigen::MatrixXd &dz, Eigen::MatrixXd &H, Eigen::MatrixXd &R);
 
     /**
+     * @brief 统一滤波器预测入口（根据 options_.filter_scheme 分派）
+     * */
+    void filterPredict(Eigen::MatrixXd &Phi, Eigen::MatrixXd &Qd);
+
+    /**
+     * @brief 统一滤波器更新入口（根据 options_.filter_scheme 分派）
+     * */
+    void filterUpdate(Eigen::MatrixXd &dz, Eigen::MatrixXd &H, Eigen::MatrixXd &R);
+
+    /**
+     * @brief UKF sigma点生成（误差状态）
+     * */
+    bool buildUkfSigmaPoints(const Eigen::VectorXd &x, const Eigen::MatrixXd &P, Eigen::MatrixXd &X,
+                             Eigen::VectorXd &Wm, Eigen::VectorXd &Wc) const;
+
+    /**
+     * @brief 用QR优先的方式从sigma点偏差重建协方差（SR-UKF风格）
+     *        returns false if fallback covariance summation should be used
+     * */
+    bool srCovarianceFromSigmaDeviations(const Eigen::MatrixXd &D, const Eigen::VectorXd &Wc, const Eigen::MatrixXd &Q,
+                                         Eigen::MatrixXd &P) const;
+
+    /**
+     * @brief 协方差对称化并做微小正定修正
+     * */
+    void regularizeCovariance(Eigen::MatrixXd &P) const;
+
+    /**
+     * @brief NIS gating for measurement updates. Returns true if the update should be rejected.
+     * */
+    bool shouldRejectUpdateByNIS(double nis, int meas_dim);
+
+    /**
      * @brief 反馈误差状态到当前状态
      *        feedback error state to the current state
      * */
@@ -251,6 +293,9 @@ private:
     Eigen::MatrixXd Cov_;
     Eigen::MatrixXd Qc_;
     Eigen::MatrixXd dx_;
+    double last_nis_{-1.0};
+    uint64_t last_nis_seq_{0};
+    uint64_t nis_reject_count_{0};
 
     const int RANK      = 21;
     const int NOISERANK = 18;

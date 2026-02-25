@@ -26,9 +26,17 @@
 #include "gi_engine.h"
 #include "insmech.h"
 
+#include <cmath>
+
 GIEngine::GIEngine(GINSOptions &options) {
 
     this->options_ = options;
+    if (options_.filter_scheme != FilterScheme::ESKF && options_.filter_scheme != FilterScheme::UKF &&
+        options_.filter_scheme != FilterScheme::SR_UKF) {
+        std::cerr << "[GIEngine] Filter scheme '" << filterSchemeName(options_.filter_scheme)
+                  << "' is not implemented yet, fallback to ESKF." << std::endl;
+        options_.filter_scheme = FilterScheme::ESKF;
+    }
     options_.print_options();
     timestamp_ = 0;
 
@@ -298,7 +306,7 @@ void GIEngine::insPropagation(IMU &imupre, IMU &imucur) {
 
     // EKF预测传播系统协方差和系统误差状态
     // do EKF predict to propagate covariance and error state
-    EKFPredict(Phi, Qd);
+    filterPredict(Phi, Qd);
 }
 
 void GIEngine::gnssUpdate(GNSS &gnssdata) {
@@ -313,25 +321,43 @@ void GIEngine::gnssUpdate(GNSS &gnssdata) {
 
     // GNSS位置测量新息
     // compute GNSS position innovation
-    Eigen::MatrixXd dz;
-    dz = Dr * (antenna_pos - gnssdata.blh);
+    const Eigen::Vector3d dz_full = Dr * (antenna_pos - gnssdata.blh);
 
     // 构造GNSS位置观测矩阵
     // construct GNSS position measurement matrix
     Eigen::MatrixXd H_gnsspos;
-    H_gnsspos.resize(3, Cov_.rows());
+    const bool gnss_xy_only = (options_.gnss_update_mode == GnssPosMeasMode::XY);
+    const int gnss_meas_dim = gnss_xy_only ? 2 : 3;
+    H_gnsspos.resize(gnss_meas_dim, Cov_.rows());
     H_gnsspos.setZero();
-    H_gnsspos.block(0, P_ID, 3, 3)   = Eigen::Matrix3d::Identity();
-    H_gnsspos.block(0, PHI_ID, 3, 3) = Rotation::skewSymmetric(pvacur_.att.cbn * options_.antlever);
+    if (gnss_xy_only) {
+        H_gnsspos.block(0, P_ID, 2, 2) = Eigen::Matrix2d::Identity();
+        H_gnsspos.block(0, PHI_ID, 2, 3) =
+            Rotation::skewSymmetric(pvacur_.att.cbn * options_.antlever).topRows(2);
+    } else {
+        H_gnsspos.block(0, P_ID, 3, 3)   = Eigen::Matrix3d::Identity();
+        H_gnsspos.block(0, PHI_ID, 3, 3) = Rotation::skewSymmetric(pvacur_.att.cbn * options_.antlever);
+    }
 
     // 位置观测噪声阵
     // construct measurement noise matrix
     Eigen::MatrixXd R_gnsspos;
-    R_gnsspos = gnssdata.std.cwiseProduct(gnssdata.std).asDiagonal();
+    if (gnss_xy_only) {
+        R_gnsspos = gnssdata.std.head<2>().cwiseProduct(gnssdata.std.head<2>()).asDiagonal();
+    } else {
+        R_gnsspos = gnssdata.std.cwiseProduct(gnssdata.std).asDiagonal();
+    }
+
+    Eigen::MatrixXd dz;
+    if (gnss_xy_only) {
+        dz = dz_full.head<2>();
+    } else {
+        dz = dz_full;
+    }
 
     // EKF更新协方差和误差状态
     // do EKF update to update covariance and error state
-    EKFUpdate(dz, H_gnsspos, R_gnsspos);
+    filterUpdate(dz, H_gnsspos, R_gnsspos);
 
     // GNSS更新之后设置为不可用
     // Set GNSS invalid after update
@@ -370,6 +396,86 @@ void GIEngine::EKFPredict(Eigen::MatrixXd &Phi, Eigen::MatrixXd &Qd) {
     dx_  = Phi * dx_;
 }
 
+void GIEngine::filterPredict(Eigen::MatrixXd &Phi, Eigen::MatrixXd &Qd) {
+
+    switch (options_.filter_scheme) {
+    case FilterScheme::ESKF:
+        EKFPredict(Phi, Qd);
+        break;
+    case FilterScheme::UKF: {
+        Eigen::MatrixXd X, Xp;
+        Eigen::VectorXd Wm, Wc;
+        if (!buildUkfSigmaPoints(dx_, Cov_, X, Wm, Wc)) {
+            std::cerr << "[GIEngine][UKF] buildUkfSigmaPoints failed at t=" << std::setprecision(10) << timestamp_
+                      << ", fallback to ESKF predict." << std::endl;
+            EKFPredict(Phi, Qd);
+            break;
+        }
+        const int n = dx_.rows();
+        const int ns = X.cols();
+        Xp.resize(n, ns);
+        for (int i = 0; i < ns; ++i) {
+            Xp.col(i) = Phi * X.col(i);
+        }
+        Eigen::VectorXd x_pred = Eigen::VectorXd::Zero(n);
+        for (int i = 0; i < ns; ++i) {
+            x_pred += Wm(i) * Xp.col(i);
+        }
+        Eigen::MatrixXd P_pred = Eigen::MatrixXd::Zero(n, n);
+        for (int i = 0; i < ns; ++i) {
+            Eigen::VectorXd d = Xp.col(i) - x_pred;
+            P_pred += Wc(i) * (d * d.transpose());
+        }
+        P_pred += Qd;
+        regularizeCovariance(P_pred);
+        dx_  = x_pred;
+        Cov_ = P_pred;
+        break;
+    }
+    case FilterScheme::SR_UKF: {
+        Eigen::MatrixXd X, Xp;
+        Eigen::VectorXd Wm, Wc;
+        if (!buildUkfSigmaPoints(dx_, Cov_, X, Wm, Wc)) {
+            std::cerr << "[GIEngine][SR-UKF] buildUkfSigmaPoints failed at t=" << std::setprecision(10) << timestamp_
+                      << ", fallback to ESKF predict." << std::endl;
+            EKFPredict(Phi, Qd);
+            break;
+        }
+        const int n  = dx_.rows();
+        const int ns = X.cols();
+        Xp.resize(n, ns);
+        for (int i = 0; i < ns; ++i) {
+            Xp.col(i) = Phi * X.col(i);
+        }
+        Eigen::VectorXd x_pred = Eigen::VectorXd::Zero(n);
+        for (int i = 0; i < ns; ++i) {
+            x_pred += Wm(i) * Xp.col(i);
+        }
+        Eigen::MatrixXd D(n, ns);
+        for (int i = 0; i < ns; ++i) {
+            D.col(i) = Xp.col(i) - x_pred;
+        }
+        Eigen::MatrixXd P_pred;
+        if (!srCovarianceFromSigmaDeviations(D, Wc, Qd, P_pred)) {
+            P_pred = Eigen::MatrixXd::Zero(n, n);
+            for (int i = 0; i < ns; ++i) {
+                P_pred += Wc(i) * (D.col(i) * D.col(i).transpose());
+            }
+            P_pred += Qd;
+        }
+        regularizeCovariance(P_pred);
+        dx_  = x_pred;
+        Cov_ = P_pred;
+        break;
+    }
+    case FilterScheme::ADAPTIVE_UKF:
+    case FilterScheme::ROBUST_UKF:
+    default:
+        EKFPredict(Phi, Qd);
+        break;
+    }
+}
+
 void GIEngine::EKFUpdate(Eigen::MatrixXd &dz, Eigen::MatrixXd &H, Eigen::MatrixXd &R) {
 
     assert(H.cols() == Cov_.rows());
@@ -379,8 +485,9 @@ void GIEngine::EKFUpdate(Eigen::MatrixXd &dz, Eigen::MatrixXd &H, Eigen::MatrixX
 
     // 计算Kalman增益
     // Compute Kalman Gain
-    auto temp         = H * Cov_ * H.transpose() + R;
-    Eigen::MatrixXd K = Cov_ * H.transpose() * temp.inverse();
+    auto temp = H * Cov_ * H.transpose() + R;
+    Eigen::MatrixXd temp_inv = temp.inverse();
+    Eigen::MatrixXd K        = Cov_ * H.transpose() * temp_inv;
 
     // 更新系统误差状态和协方差
     // update system error state and covariance
@@ -391,8 +498,285 @@ void GIEngine::EKFUpdate(Eigen::MatrixXd &dz, Eigen::MatrixXd &H, Eigen::MatrixX
     // 如果每次更新后都进行状态反馈，则更新前dx_一直为0，下式可以简化为：dx_ = K * dz;
     // if state feedback is performed after every update, dx_ is always zero before the update
     // the following formula can be simplified as : dx_ = K * dz;
-    dx_  = dx_ + K * (dz - H * dx_);
+    Eigen::MatrixXd innov = dz - H * dx_;
+    last_nis_             = (innov.transpose() * temp_inv * innov)(0, 0);
+    ++last_nis_seq_;
+    if (shouldRejectUpdateByNIS(last_nis_, dz.rows())) {
+        return;
+    }
+    dx_  = dx_ + K * innov;
     Cov_ = I * Cov_ * I.transpose() + K * R * K.transpose();
+}
+
+void GIEngine::filterUpdate(Eigen::MatrixXd &dz, Eigen::MatrixXd &H, Eigen::MatrixXd &R) {
+
+    switch (options_.filter_scheme) {
+    case FilterScheme::ESKF:
+        EKFUpdate(dz, H, R);
+        break;
+    case FilterScheme::UKF: {
+        Eigen::MatrixXd X;
+        Eigen::VectorXd Wm, Wc;
+        if (!buildUkfSigmaPoints(dx_, Cov_, X, Wm, Wc)) {
+            std::cerr << "[GIEngine][UKF] buildUkfSigmaPoints failed at t=" << std::setprecision(10) << timestamp_
+                      << ", fallback to ESKF update." << std::endl;
+            EKFUpdate(dz, H, R);
+            break;
+        }
+        const int n = dx_.rows();
+        const int m = dz.rows();
+        const int ns = X.cols();
+
+        Eigen::MatrixXd Z(m, ns);
+        for (int i = 0; i < ns; ++i) {
+            Z.col(i) = H * X.col(i);
+        }
+
+        Eigen::VectorXd z_pred = Eigen::VectorXd::Zero(m);
+        for (int i = 0; i < ns; ++i) {
+            z_pred += Wm(i) * Z.col(i);
+        }
+
+        Eigen::MatrixXd S = Eigen::MatrixXd::Zero(m, m);
+        Eigen::MatrixXd Pxz = Eigen::MatrixXd::Zero(n, m);
+        for (int i = 0; i < ns; ++i) {
+            Eigen::VectorXd dxs = X.col(i) - dx_;
+            Eigen::VectorXd dzs = Z.col(i) - z_pred;
+            S += Wc(i) * (dzs * dzs.transpose());
+            Pxz += Wc(i) * (dxs * dzs.transpose());
+        }
+        S += R;
+        S = (S + S.transpose()) * 0.5;
+
+        Eigen::LDLT<Eigen::MatrixXd> ldlt(S);
+        if (ldlt.info() != Eigen::Success) {
+            EKFUpdate(dz, H, R);
+            break;
+        }
+        Eigen::MatrixXd K = Pxz * ldlt.solve(Eigen::MatrixXd::Identity(m, m));
+        Eigen::VectorXd innov = dz - z_pred;
+        last_nis_             = (innov.transpose() * ldlt.solve(innov))(0, 0);
+        ++last_nis_seq_;
+        if (shouldRejectUpdateByNIS(last_nis_, m)) {
+            break;
+        }
+        dx_               = dx_ + K * innov;
+        Cov_              = Cov_ - K * S * K.transpose();
+        regularizeCovariance(Cov_);
+        break;
+    }
+    case FilterScheme::SR_UKF: {
+        Eigen::MatrixXd X;
+        Eigen::VectorXd Wm, Wc;
+        if (!buildUkfSigmaPoints(dx_, Cov_, X, Wm, Wc)) {
+            std::cerr << "[GIEngine][SR-UKF] buildUkfSigmaPoints failed at t=" << std::setprecision(10) << timestamp_
+                      << ", fallback to ESKF update." << std::endl;
+            EKFUpdate(dz, H, R);
+            break;
+        }
+        const int n  = dx_.rows();
+        const int m  = dz.rows();
+        const int ns = X.cols();
+
+        Eigen::MatrixXd Z(m, ns);
+        for (int i = 0; i < ns; ++i) {
+            Z.col(i) = H * X.col(i);
+        }
+
+        Eigen::VectorXd z_pred = Eigen::VectorXd::Zero(m);
+        for (int i = 0; i < ns; ++i) {
+            z_pred += Wm(i) * Z.col(i);
+        }
+
+        Eigen::MatrixXd Dz(m, ns), Dx(n, ns);
+        for (int i = 0; i < ns; ++i) {
+            Dz.col(i) = Z.col(i) - z_pred;
+            Dx.col(i) = X.col(i) - dx_;
+        }
+
+        Eigen::MatrixXd Szz;
+        if (!srCovarianceFromSigmaDeviations(Dz, Wc, R, Szz)) {
+            Szz = Eigen::MatrixXd::Zero(m, m);
+            for (int i = 0; i < ns; ++i) {
+                Szz += Wc(i) * (Dz.col(i) * Dz.col(i).transpose());
+            }
+            Szz += R;
+        }
+        regularizeCovariance(Szz);
+
+        Eigen::MatrixXd Pxz = Eigen::MatrixXd::Zero(n, m);
+        for (int i = 0; i < ns; ++i) {
+            Pxz += Wc(i) * (Dx.col(i) * Dz.col(i).transpose());
+        }
+
+        Eigen::LDLT<Eigen::MatrixXd> ldlt(Szz);
+        if (ldlt.info() != Eigen::Success) {
+            EKFUpdate(dz, H, R);
+            break;
+        }
+        Eigen::MatrixXd K = Pxz * ldlt.solve(Eigen::MatrixXd::Identity(m, m));
+        Eigen::VectorXd innov = dz - z_pred;
+        last_nis_             = (innov.transpose() * ldlt.solve(innov))(0, 0);
+        ++last_nis_seq_;
+        if (shouldRejectUpdateByNIS(last_nis_, m)) {
+            break;
+        }
+        dx_               = dx_ + K * innov;
+        Cov_              = Cov_ - K * Szz * K.transpose();
+        regularizeCovariance(Cov_);
+        break;
+    }
+    case FilterScheme::ADAPTIVE_UKF:
+    case FilterScheme::ROBUST_UKF:
+    default:
+        EKFUpdate(dz, H, R);
+        break;
+    }
+}
+
+bool GIEngine::shouldRejectUpdateByNIS(double nis, int meas_dim) {
+    if (!options_.gnss_nis_gate_enable) {
+        return false;
+    }
+    if (!std::isfinite(nis)) {
+        ++nis_reject_count_;
+        std::cerr << "[GIEngine][NIS-GATE] reject non-finite NIS at t=" << std::setprecision(10) << timestamp_
+                  << " (dim=" << meas_dim << ")" << std::endl;
+        return true;
+    }
+    if (nis <= options_.gnss_nis_gate_threshold) {
+        return false;
+    }
+    ++nis_reject_count_;
+    if (nis_reject_count_ <= 10 || (nis_reject_count_ % 20) == 0) {
+        std::cerr << "[GIEngine][NIS-GATE] reject GNSS update at t=" << std::setprecision(10) << timestamp_
+                  << " nis=" << nis << " > " << options_.gnss_nis_gate_threshold << " (dim=" << meas_dim
+                  << ", reject_count=" << nis_reject_count_ << ")" << std::endl;
+    }
+    return true;
+}
+
+bool GIEngine::buildUkfSigmaPoints(const Eigen::VectorXd &x, const Eigen::MatrixXd &P, Eigen::MatrixXd &X,
+                                   Eigen::VectorXd &Wm, Eigen::VectorXd &Wc) const {
+
+    const int n = x.rows();
+    if (P.rows() != n || P.cols() != n || n <= 0) {
+        return false;
+    }
+
+    const double alpha = options_.ukf_alpha;
+    const double beta  = options_.ukf_beta;
+    const double kappa = options_.ukf_kappa;
+    const double lambda = alpha * alpha * (n + kappa) - n;
+    const double c = n + lambda;
+    if (c <= 1e-12) {
+        return false;
+    }
+
+    Eigen::MatrixXd P_reg = (P + P.transpose()) * 0.5;
+    Eigen::LLT<Eigen::MatrixXd> llt;
+    bool ok = false;
+    double jitter = 1e-12;
+    for (int k = 0; k < 8; ++k) {
+        llt.compute(P_reg);
+        if (llt.info() == Eigen::Success) {
+            ok = true;
+            break;
+        }
+        P_reg.diagonal().array() += jitter;
+        jitter *= 10.0;
+    }
+    if (!ok) {
+        return false;
+    }
+
+    Eigen::MatrixXd S = llt.matrixL();
+    const int ns      = 2 * n + 1;
+    X.resize(n, ns);
+    Wm.resize(ns);
+    Wc.resize(ns);
+
+    X.col(0) = x;
+    const double gamma = std::sqrt(c);
+    for (int i = 0; i < n; ++i) {
+        Eigen::VectorXd col = gamma * S.col(i);
+        X.col(i + 1)        = x + col;
+        X.col(i + 1 + n)    = x - col;
+    }
+
+    Wm.setConstant(1.0 / (2.0 * c));
+    Wc.setConstant(1.0 / (2.0 * c));
+    Wm(0) = lambda / c;
+    Wc(0) = lambda / c + (1.0 - alpha * alpha + beta);
+    return true;
+}
+
+bool GIEngine::srCovarianceFromSigmaDeviations(const Eigen::MatrixXd &D, const Eigen::VectorXd &Wc, const Eigen::MatrixXd &Q,
+                                               Eigen::MatrixXd &P) const {
+
+    const int n = D.rows();
+    const int ns = D.cols();
+    if (Wc.size() != ns || Q.rows() != n || Q.cols() != n) {
+        return false;
+    }
+
+    // 若出现负权重，严格SR-UKF需要cholupdate/downdate；当前实现回退到普通求和以保证正确性
+    for (int i = 0; i < ns; ++i) {
+        if (Wc(i) < 0.0) {
+            return false;
+        }
+    }
+
+    Eigen::MatrixXd Qsym = (Q + Q.transpose()) * 0.5;
+    Eigen::LLT<Eigen::MatrixXd> qllt;
+    bool qok = false;
+    double jitter = 1e-12;
+    for (int k = 0; k < 8; ++k) {
+        qllt.compute(Qsym);
+        if (qllt.info() == Eigen::Success) {
+            qok = true;
+            break;
+        }
+        Qsym.diagonal().array() += jitter;
+        jitter *= 10.0;
+    }
+    if (!qok) {
+        return false;
+    }
+
+    int extra_cols = 0;
+    for (int i = 0; i < ns; ++i) {
+        if (Wc(i) > 0.0) {
+            ++extra_cols;
+        }
+    }
+    Eigen::MatrixXd U(n, n + extra_cols);
+    U.leftCols(n) = qllt.matrixL();
+    int col = n;
+    for (int i = 0; i < ns; ++i) {
+        if (Wc(i) <= 0.0) {
+            continue;
+        }
+        U.col(col++) = std::sqrt(Wc(i)) * D.col(i);
+    }
+
+    Eigen::HouseholderQR<Eigen::MatrixXd> qr(U.transpose());
+    Eigen::MatrixXd qr_mat = qr.matrixQR();
+    Eigen::MatrixXd R = qr_mat.topLeftCorner(n, n).template triangularView<Eigen::Upper>();
+    Eigen::MatrixXd S = R.transpose();
+    P = S * S.transpose();
+    return true;
+}
+
+void GIEngine::regularizeCovariance(Eigen::MatrixXd &P) const {
+
+    P = (P + P.transpose()) * 0.5;
+    constexpr double min_diag = 1e-16;
+    for (int i = 0; i < P.rows(); ++i) {
+        if (P(i, i) < min_diag) {
+            P(i, i) = min_diag;
+        }
+    }
 }
 
 void GIEngine::stateFeedback() {

@@ -1,0 +1,116 @@
+kf_gins_node:
+  ros__parameters:
+    # M2DGR door-02 validation config (Xsens IMU variant)
+    # IMPORTANT:
+    #   Current bag metadata (door_ros2_bag) does NOT expose an explicit Xsens IMU topic.
+    #   Available IMU topics are:
+    #     /handsfree/imu, /camera/imu, /dvs/imu
+    #   So this file is a calibration-consistent template for Xsens IMU, and only works
+    #   if you provide/remap an actual Xsens IMU topic.
+
+    # Subscribed topics
+    imu_topic: "/xsens/imu" # TODO: replace with actual Xsens IMU topic in your bag
+    gps_topic: "/ublox/fix" # sensor_msgs/NavSatFix
+
+    # Published topics
+    odom_topic: "/kf_gins/odom_pred"
+    odom_fused_topic: "/kf_gins/odom_fused"
+    path_topic: "/kf_gins/path"
+    navsat_topic: "/kf_gins/gps/fix"
+    nis_topic: "/kf_gins/nis"
+
+    # Frames / TF
+    frame_id: "map"
+    path_frame_id: "map"
+    navsat_frame_id: "map"
+    child_frame_id: "base_link"
+    publish_tf: true
+
+    # Output controls
+    publish_path: true
+    path_incremental_output: true
+    path_publish_rate: 5.0
+    input_stale_timeout: 0.5
+    path_max_size: 3000
+    odom_publish_rate: 30.0
+    navsat_publish_rate: 30.0
+    publish_navsat: true
+    publish_nis: true
+    output_enu: true
+    odom_orientation_flu: true
+
+    # Filter selection
+    filter_scheme: "ESKF" # ESKF / UKF / SR_UKF
+    ukf_alpha: 0.001
+    ukf_beta: 2.0
+    ukf_kappa: 0.0
+
+    # Heading fusion mode (skeleton/config ready; GIEngine heading update to be added)
+    # none / single_gnss_course / dual_gnss_heading
+    heading_fusion_enable: false
+    heading_mode: "none"
+    heading_fallback_to_imu: true
+    single_heading_min_speed: 1.0
+    single_heading_std_deg: 5.0
+    single_heading_blend_gain: 0.2
+    dual_heading_topic: "/gnss/dual_heading"
+    dual_heading_std_deg: 1.0
+    dual_heading_quality_gate: true
+    dual_heading_nis_gate: true
+
+    # IMU axis convention (Xsens is typically ROS FLU if published via standard driver)
+    imu_in_flu: true
+
+    # IMU timing (set after checking actual Xsens topic rate)
+    imu_rate: 100.0
+    max_imu_dt: 0.1
+    max_imu_ahead: 1.0
+
+    # Dataset time window
+    use_wall_time_stamp: false
+    use_absolute_time: false
+    start_time: 0.0
+    end_time: -1.0
+
+    # Queues
+    max_queue_size: 6000
+
+    # GNSS noise
+    use_navsatfix_covariance: true
+    gnss_std: [3.0, 3.0, 5.0]
+
+    # Initial state (REPLACE before running)
+    initpos: [0.0, 0.0, 0.0]
+    initvel: [0.0, 0.0, 0.0]
+    initatt: [0.0, 0.0, 0.0]
+
+    initgyrbias: [0.0, 0.0, 0.0]
+    initaccbias: [0.0, 0.0, 0.0]
+    initgyrscale: [0.0, 0.0, 0.0]
+    initaccscale: [0.0, 0.0, 0.0]
+
+    initposstd: [5.0, 5.0, 10.0]
+    initvelstd: [0.5, 0.5, 0.5]
+    initattstd: [2.0, 2.0, 15.0]
+
+    # Xsens IMU noise (derived approximately from M2DGR/calibr.txt)
+    # gyr_n: 2.1309311394972831e-03
+    # gyr_w: 3.6603917782528627e-05
+    # acc_n: 1.2820343288774358e-02
+    # acc_w: 1.3677912958097768e-03
+    imunoise:
+      arw: [7.326, 7.326, 7.326] # [deg/sqrt(hr)]
+      vrw: [0.769, 0.769, 0.769] # [m/s/sqrt(hr)]
+      gbstd: [7.550, 7.550, 7.550] # [deg/hr] approx
+      abstd: [136.779, 136.779, 136.779] # [mGal] approx
+      gsstd: [300.0, 300.0, 300.0]
+      asstd: [300.0, 300.0, 300.0]
+      corrtime: 4.0
+
+    # GNSS antenna lever arm wrt Xsens IMU in KF-GINS FRD (front-right-down)
+    # Derived from calibr.txt in LiDAR frame:
+    #   GNSS(ublox,xsens) wrt LiDAR = [-0.09825, 0.00582, 0.72673]
+    #   Xsens IMU wrt LiDAR         = [ 0.15905, 0.00067,-0.16824]
+    #   lever_flu = GNSS - Xsens    = [-0.25730, 0.00515, 0.89497]
+    #   lever_frd                    = [-0.25730,-0.00515,-0.89497]
+    antlever: [-0.25730, -0.00515, -0.89497]

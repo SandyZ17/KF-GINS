@@ -2,4 +2,6 @@ bin/
 lib/
 build/
 .idea/
+.vscode/
 dataset/
+results/

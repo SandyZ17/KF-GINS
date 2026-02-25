@@ -1,0 +1,128 @@
+kf_gins_node:
+  ros__parameters:
+    # XY-only evaluation variant (GNSS horizontal-only update + 2D NIS gate mode)
+    # 订阅话题
+    imu_topic: "/imu/data" # sensor_msgs/Imu
+    gps_topic: "/reference/inspvax/navsatfix" # sensor_msgs/NavSatFix
+
+    # 发布话题
+    odom_topic: "/kf_gins/odom_pred" # nav_msgs/Odometry (pred)
+    odom_fused_topic: "/kf_gins/odom_fused" # nav_msgs/Odometry (fused)
+    path_topic: "/kf_gins/path" # nav_msgs/Path
+    navsat_topic: "/kf_gins/gps/fix" # sensor_msgs/NavSatFix (融合后BLH)
+    nis_topic: "/kf_gins/nis" # std_msgs/Float64 (GNSS更新时的NIS)
+
+    # TF/坐标系
+    frame_id: "map" # 里程计所在坐标系
+    path_frame_id: "map" # Path 坐标系
+    navsat_frame_id: "map" # NavSatFix 坐标系
+    child_frame_id: "base_link" # 车体坐标系
+    publish_tf: true # 发布 TF
+
+    # 路径输出
+    publish_path: true # 发布 nav_msgs/Path
+    path_incremental_output: true # true: Path每次只发新增点(单点Path); false: 累积轨迹
+    path_publish_rate: 5.0 # Path 发布频率(Hz), <=0 表示每帧都发
+    input_stale_timeout: 0.5 # 输入超时(秒), 超时后停止预测发布 odom/path
+    path_max_size: 2000 # 轨迹点上限（<=0 表示不裁剪）
+    odom_publish_rate: 30.0 # Odom 发布频率(Hz), <=0 表示每帧都发
+    navsat_publish_rate: 30.0 # NavSatFix 发布频率(Hz), <=0 表示跟随 odom 发布频率
+    publish_navsat: true # 发布融合后的 sensor_msgs/NavSatFix
+    publish_nis: true # 发布NIS统计量（GNSS更新触发）
+
+    # 输出坐标系
+    output_enu: true # true: ENU (ROS 标准) / false: NED
+    odom_orientation_flu: true # true: 输出符合ROS语义的FLU姿态四元数
+
+    # 滤波方案（枚举字符串，当前仅 ESKF/UKF/SR_UKF 已实现；其他会回退到 ESKF）
+    # 可选: ESKF / UKF / SR_UKF / ADAPTIVE_UKF / ROBUST_UKF
+    filter_scheme: "UKF"
+    ukf_alpha: 0.001
+    ukf_beta: 2.0
+    ukf_kappa: 0.0
+
+    # 单/双天线航向模式（当前single实现为发布侧融合；dual为预留）
+    heading_fusion_enable: false
+    heading_mode: "none" # none / single_gnss_course / dual_gnss_heading
+    heading_fallback_to_imu: true
+    single_heading_min_speed: 1.0
+    single_heading_std_deg: 5.0
+    single_heading_blend_gain: 0.2
+    dual_heading_topic: "/gnss/dual_heading"
+    dual_heading_std_deg: 1.0
+    dual_heading_quality_gate: true
+    dual_heading_nis_gate: true
+
+    # IMU 数据轴向
+    imu_in_flu: false # 数据集 IMU 为 FRD
+
+    # IMU 时间/频率
+    imu_rate: 200.0 # IMU 期望频率 (Hz)
+    max_imu_dt: 0.1 # 异常时间间隔阈值（秒）
+    max_imu_ahead: 1.0 # 允许IMU超前GNSS处理的时间(秒), 减少1Hz GNSS导致的输出卡顿
+
+    # 数据时间窗口
+    use_wall_time_stamp: false
+    use_absolute_time: false # 按消息时间戳过滤
+    start_time: 50.0 # dataset/kf-gins.yaml 中的 starttime
+    end_time: -1.0 # -1 表示不限制
+
+    # 队列缓存
+    max_queue_size: 2000 # IMU/GNSS 缓存队列长度
+
+    # GNSS 噪声
+    use_navsatfix_covariance: true # 优先使用 NavSatFix 协方差
+    gnss_std: [1.0, 1.0, 2.0] # 未提供协方差时的 std (m)
+    gnss_pre_gate_enable: false
+    gnss_pre_gate_max_hstd: -1.0
+    gnss_pre_gate_max_vstd: -1.0
+    gnss_pre_gate_max_speed: -1.0
+    gnss_pre_gate_min_dt: 0.2
+    gnss_update_mode: "xy" # xyz / xy（地面车辆可选xy）
+    gnss_nis_gate_mode: "xy" # 当前实现要求与 gnss_update_mode 一致
+    gnss_nis_gate_enable: false
+    gnss_nis_gate_threshold: 9.21 # xyz模式下3D位置卡方99%门限；xy模式建议9.21
+
+    # 自动初始化（当前demo保留手工初值，默认关闭）
+    auto_init_enable: false
+    auto_init_pos_only: false
+    auto_init_gnss_window_sec: 8.0
+    auto_init_imu_window_sec: 3.0
+    auto_init_min_gnss_samples: 5
+    auto_init_min_imu_samples: 100
+    auto_init_use_gnss_median: true
+    auto_init_reject_gnss_outlier: true
+    auto_init_gnss_outlier_sigma: 3.5
+    auto_init_require_static_rp: false
+    auto_init_max_acc_std: 0.5
+    auto_init_max_gyro_std: 0.1
+    auto_init_yaw_mode: "gnss_course_or_config" # config_only / gnss_course_or_config
+    auto_init_min_speed_for_yaw: 1.0
+
+    # KF-GINS 参数（来自 dataset/kf-gins.yaml）
+    # initatt 顺序: [yaw, pitch, roll] (deg)
+    initpos: [30.4447873701, 114.4718632047, 20.899]
+    initvel: [0.0, 0.0, 0.0]
+    initatt: [0.85421502, -2.03480295, 185.70235133]
+
+    initgyrbias: [0.0, 0.0, 0.0] # [deg/h]
+    initaccbias: [0.0, 0.0, 0.0] # [mGal]
+    initgyrscale: [0.0, 0.0, 0.0] # [ppm]
+    initaccscale: [0.0, 0.0, 0.0] # [ppm]
+
+    initposstd: [0.005, 0.004, 0.008] # [m]
+    initvelstd: [0.003, 0.004, 0.004] # [m/s]
+    initattstd: [0.003, 0.003, 0.023] # [deg]
+
+    # IMU 噪声参数
+    imunoise:
+      arw: [0.003, 0.003, 0.003] # [deg/sqrt(hr)]
+      vrw: [0.03, 0.03, 0.03] # [m/s/sqrt(hr)]
+      gbstd: [0.027, 0.027, 0.027] # [deg/hr]
+      abstd: [15.0, 15.0, 15.0] # [mGal]
+      gsstd: [300.0, 300.0, 300.0] # [ppm]
+      asstd: [300.0, 300.0, 300.0] # [ppm]
+      corrtime: 4.0 # [hr]
+
+    # 天线杆臂 (IMU 前右下, FRD)
+    antlever: [0.136, -0.301, -0.184] # [m]

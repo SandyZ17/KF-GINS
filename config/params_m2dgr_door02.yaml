@@ -1,0 +1,157 @@
+kf_gins_node:
+  ros__parameters:
+    # M2DGR door-02 validation config
+    # Sources:
+    # - src/KF-GINS/dataset/M2DGR/calibr.txt
+    # - src/KF-GINS/dataset/M2DGR/door_ros2_bag/metadata.yaml
+    # - platform layout image (sensor arrangement sanity check)
+    #
+    # Chosen sensor pair for KF-GINS:
+    # - IMU: /handsfree/imu
+    # - GNSS: /ublox/fix
+    # Reason:
+    #   calibr.txt provides both "Handsfree IMU" and "UBLOX,Xsens GNSS" extrinsics to LiDAR,
+    #   so GNSS antenna lever arm can be derived consistently in the same frame.
+
+    # Subscribed topics
+    imu_topic: "/handsfree/imu" # sensor_msgs/Imu
+    gps_topic: "/ublox/fix" # sensor_msgs/NavSatFix
+
+    # Published topics
+    odom_topic: "/kf_gins/odom_pred"
+    odom_fused_topic: "/kf_gins/odom_fused"
+    path_topic: "/kf_gins/path"
+    navsat_topic: "/kf_gins/gps/fix"
+    nis_topic: "/kf_gins/nis"
+
+    # Frames / TF
+    frame_id: "map"
+    path_frame_id: "map"
+    navsat_frame_id: "map"
+    child_frame_id: "base_link"
+    publish_tf: true
+
+    # Output controls
+    publish_path: true
+    path_incremental_output: true
+    path_publish_rate: 5.0
+    input_stale_timeout: 0.5
+    path_max_size: 3000
+    odom_publish_rate: 30.0
+    navsat_publish_rate: 30.0
+    publish_navsat: true
+    publish_nis: true
+    output_enu: true
+    odom_orientation_flu: true
+
+    # Filter selection
+    filter_scheme: "ESKF" # Debug baseline first; compare UKF/SR_UKF after NIS is reasonable
+    ukf_alpha: 0.001
+    ukf_beta: 2.0
+    ukf_kappa: 0.0
+
+    # Heading fusion mode (skeleton/config ready; GIEngine heading update to be added)
+    # none / single_gnss_course / dual_gnss_heading
+    heading_fusion_enable: false
+    heading_mode: "none"
+    heading_fallback_to_imu: true
+    single_heading_min_speed: 1.0 # [m/s], single-antenna course valid only above this speed
+    single_heading_std_deg: 5.0 # [deg]
+    single_heading_blend_gain: 0.2 # [0..1], publish-side yaw blend with IMU attitude
+    dual_heading_topic: "/gnss/dual_heading" # placeholder topic for future dual-antenna heading input
+    dual_heading_std_deg: 1.0 # [deg]
+    dual_heading_quality_gate: true
+    dual_heading_nis_gate: true
+
+    # IMU axis convention
+    # Handsfree IMU is typically ROS FLU in this bag. Verify static gravity sign.
+    imu_in_flu: true
+
+    # IMU timing
+    # /handsfree/imu count ~= 18271 over ~127.3s -> ~143.5 Hz average
+    imu_rate: 145.0
+    max_imu_dt: 0.1
+    max_imu_ahead: 0.1
+
+    # Dataset time window
+    use_wall_time_stamp: false
+    use_absolute_time: false
+    start_time: 0.0
+    end_time: -1.0
+
+    # Auto initialization (window-based)
+    # Use GNSS/IMU windows to estimate initpos and roll/pitch before KF-GINS starts.
+    auto_init_enable: true
+    auto_init_pos_only: true          # only initialize initpos from GNSS window; keep attitude from params
+    auto_init_gnss_window_sec: 10.0
+    auto_init_imu_window_sec: 3.0
+    auto_init_min_gnss_samples: 10   # /ublox/fix is ~1 Hz; target ~10 s position initialization window
+    auto_init_min_imu_samples: 100
+    auto_init_use_gnss_median: true
+    auto_init_reject_gnss_outlier: true
+    auto_init_gnss_outlier_sigma: 3.5
+    auto_init_require_static_rp: true # ignored when auto_init_pos_only=true
+    auto_init_max_acc_std: 0.3
+    auto_init_max_gyro_std: 0.05
+    auto_init_yaw_mode: "config_only" # ignored when auto_init_pos_only=true; keep config yaw
+    auto_init_min_speed_for_yaw: 1.0
+
+    # Queues
+    max_queue_size: 6000
+
+    # GNSS noise
+    use_navsatfix_covariance: false
+    gnss_std: [12.0, 12.0, 20.0] # conservative GNSS weighting for door scene
+    gnss_pre_gate_enable: true
+    gnss_pre_gate_max_hstd: 30.0   # reject gross GNSS degradation before enqueue
+    gnss_pre_gate_max_vstd: -1.0   # disabled (ground vehicle, z already ignored in update)
+    gnss_pre_gate_max_speed: 8.0   # 1Hz GNSS jump pre-gate [m/s]
+    gnss_pre_gate_min_dt: 0.5
+    gnss_update_mode: "xy"       # ground vehicle: ignore GNSS z in update
+    gnss_nis_gate_mode: "xy"     # gate on horizontal residual only (current impl requires match)
+    gnss_nis_gate_enable: true
+    gnss_nis_gate_threshold: 9.21 # chi-square 99% for 2D position update
+
+    # Initial state fallback / prior (auto_init_enable=true will override initpos and roll/pitch)
+    # initatt order in KF-GINS is [yaw, pitch, roll] [deg]
+    initpos: [0.0, 0.0, 0.0] # [lat_deg, lon_deg, h_m]
+    initvel: [0.0, 0.0, 0.0] # [m/s]
+    initatt: [0.0, 0.0, 0.0] # [yaw_deg, pitch_deg, roll_deg]
+
+    initgyrbias: [0.0, 0.0, 0.0] # [deg/h]
+    initaccbias: [0.0, 0.0, 0.0] # [mGal]
+    initgyrscale: [0.0, 0.0, 0.0] # [ppm]
+    initaccscale: [0.0, 0.0, 0.0] # [ppm]
+
+    # Conservative initial uncertainty (tune after first run)
+    initposstd: [5.0, 5.0, 10.0] # [m]
+    initvelstd: [1.0, 1.0, 1.0] # [m/s]
+    initattstd: [5.0, 5.0, 30.0] # [deg]
+
+    # IMU noise (Handsfree IMU, derived approximately from calibr.txt)
+    # calibr.txt:
+    #   gyr_n: 2.3417543020438883e-03
+    #   gyr_w: 1.4428407712885209e-05
+    #   acc_n: 3.7686306102624571e-02
+    #   acc_w: 1.1416642385952368e-03
+    # Mapping assumptions:
+    #   gyr_n [rad/s/sqrt(Hz)] -> arw [deg/sqrt(hr)]
+    #   acc_n [m/s^2/sqrt(Hz)] -> vrw [m/s/sqrt(hr)]
+    #   gyr_w [rad/s] -> gbstd [deg/hr] (approx)
+    #   acc_w [m/s^2] -> abstd [mGal] (approx)
+    imunoise:
+      arw: [16.100, 16.100, 16.100] # [deg/sqrt(hr)] inflated for consistency tuning
+      vrw: [4.522, 4.522, 4.522] # [m/s/sqrt(hr)]
+      gbstd: [10.000, 10.000, 10.000] # [deg/hr]
+      abstd: [300.000, 300.000, 300.000] # [mGal]
+      gsstd: [300.0, 300.0, 300.0] # [ppm]
+      asstd: [300.0, 300.0, 300.0] # [ppm]
+      corrtime: 4.0 # [hr]
+
+    # GNSS antenna lever arm wrt selected IMU (/handsfree/imu), in KF-GINS FRD (front-right-down)
+    # Derived from calibr.txt using:
+    #   GNSS wrt LiDAR = [-0.09825, 0.00582, 0.72673]
+    #   Handsfree IMU wrt LiDAR = [-0.27255, 0.00053, -0.17954]
+    # Assuming both extrinsics are expressed in the same LiDAR frame and Handsfree IMU frame aligns with LiDAR frame (FLU),
+    # then lever in IMU-FLU is [0.17430, 0.00529, 0.90627], converted to FRD:
+    antlever: [0.17430, -0.00529, -0.90627] # [m]

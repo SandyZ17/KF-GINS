@@ -1,0 +1,18 @@
+version: 1
+profiles:
+  conservative_xy:
+    pos_xy_good_m: 0.5
+    pos_xy_bad_m: 2.0
+    label_rule: |
+      reliable if err_xy <= pos_xy_good_m
+      unreliable if err_xy >= pos_xy_bad_m
+      uncertain otherwise
+
+  urban_degraded_xy:
+    pos_xy_good_m: 1.5
+    pos_xy_bad_m: 5.0
+    label_rule: |
+      reliable if err_xy <= pos_xy_good_m
+      unreliable if err_xy >= pos_xy_bad_m
+      uncertain otherwise
+

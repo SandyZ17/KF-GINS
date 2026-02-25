@@ -1,0 +1,108 @@
+kf_gins_node:
+  ros__parameters:
+    # M2DGR-plus / switch2_ros2_bag (validation config)
+    # Source bag:
+    #   src/KF-GINS/dataset/M2DGR-plus/switch2_ros2_bag
+    #
+    # Notes:
+    # 1) This file is generated primarily from calibr.txt and bag topic metadata.
+    # 2) GNSS antenna lever arm is NOT explicitly provided in calibr.txt.
+    #    antlever is left as zero and should be replaced after checking your installation image/manual measurement.
+
+    # Subscribed topics
+    imu_topic: "/imu" # sensor_msgs/Imu (about 100 Hz in switch2_ros2_bag)
+    gps_topic: "/ublox_driver/receiver_lla" # sensor_msgs/NavSatFix (about 1 Hz)
+
+    # Published topics
+    odom_topic: "/kf_gins/odom_pred"
+    odom_fused_topic: "/kf_gins/odom_fused"
+    path_topic: "/kf_gins/path"
+    navsat_topic: "/kf_gins/gps/fix"
+    nis_topic: "/kf_gins/nis"
+
+    # Frames / TF
+    frame_id: "map"
+    path_frame_id: "map"
+    navsat_frame_id: "map"
+    child_frame_id: "base_link"
+    publish_tf: true
+
+    # Output controls
+    publish_path: true
+    path_incremental_output: true
+    path_publish_rate: 5.0
+    input_stale_timeout: 0.5
+    path_max_size: 2000
+    odom_publish_rate: 30.0
+    navsat_publish_rate: 30.0
+    publish_navsat: true
+    publish_nis: true
+    output_enu: true
+    odom_orientation_flu: true
+
+    # Filter selection
+    # Options: ESKF / UKF / SR_UKF / ADAPTIVE_UKF / ROBUST_UKF
+    filter_scheme: "ESKF"
+    ukf_alpha: 0.001
+    ukf_beta: 2.0
+    ukf_kappa: 0.0
+
+    # IMU axis convention
+    # M2DGR-plus /imu is usually ROS-style FLU. Verify with static gravity sign before long runs.
+    imu_in_flu: true
+
+    # IMU timing
+    imu_rate: 100.0
+    max_imu_dt: 0.1
+    max_imu_ahead: 1.0
+
+    # Time window
+    use_wall_time_stamp: false
+    use_absolute_time: false
+    start_time: 0.0
+    end_time: -1.0
+
+    # Queues
+    max_queue_size: 4000
+
+    # GNSS noise
+    use_navsatfix_covariance: true
+    gnss_std: [3.0, 3.0, 5.0] # fallback std [m] when NavSatFix covariance is unavailable
+
+    # Initial state (REPLACE before validation)
+    # Set from the first valid /ublox_driver/receiver_lla and a reasonable initial heading.
+    initpos: [0.0, 0.0, 0.0] # [lat_deg, lon_deg, h_m]
+    initvel: [0.0, 0.0, 0.0] # [m/s]
+    initatt: [0.0, 0.0, 0.0] # [roll_deg, pitch_deg, yaw_deg]
+
+    initgyrbias: [0.0, 0.0, 0.0] # [deg/h]
+    initaccbias: [0.0, 0.0, 0.0] # [mGal]
+    initgyrscale: [0.0, 0.0, 0.0] # [ppm]
+    initaccscale: [0.0, 0.0, 0.0] # [ppm]
+
+    # Conservative initial std (tune for your validation protocol)
+    initposstd: [5.0, 5.0, 10.0] # [m]
+    initvelstd: [0.5, 0.5, 0.5] # [m/s]
+    initattstd: [2.0, 2.0, 10.0] # [deg]
+
+    # IMU noise (derived approximately from src/KF-GINS/dataset/M2DGR-plus/calibr.txt)
+    # calibr.txt:
+    #   acc_n=1.2374e-02, gyr_n=3.0033e-03, acc_w=1.9218e-04, gyr_w=5.4692e-05
+    # Mapping assumptions:
+    #   gyr_n [rad/s/sqrt(Hz)] -> arw [deg/sqrt(hr)]
+    #   acc_n [m/s^2/sqrt(Hz)] -> vrw [m/s/sqrt(hr)]
+    #   gyr_w [rad/s] -> gbstd [deg/hr] (approx.)
+    #   acc_w [m/s^2] -> abstd [mGal] (approx.)
+    imunoise:
+      arw: [10.324, 10.324, 10.324] # [deg/sqrt(hr)] approx from gyr_n
+      vrw: [0.742, 0.742, 0.742] # [m/s/sqrt(hr)] approx from acc_n
+      gbstd: [11.281, 11.281, 11.281] # [deg/hr] approx from gyr_w
+      abstd: [19.218, 19.218, 19.218] # [mGal] approx from acc_w
+      gsstd: [300.0, 300.0, 300.0] # [ppm]
+      asstd: [300.0, 300.0, 300.0] # [ppm]
+      corrtime: 4.0 # [hr]
+
+    # GNSS antenna lever arm wrt IMU (IMU FRD: front-right-down)
+    # TODO: replace using installation image / manual measurement.
+    antlever: [0.0, 0.0, 0.0]
+
