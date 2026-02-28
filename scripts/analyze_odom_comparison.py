@@ -5,7 +5,7 @@ Analyze and compare two odometry topics from a rosbag2 dataset.
 What this script does:
 1. Read two nav_msgs/Odometry topics from rosbag2.
 2. Time-align topic A to topic B using linear interpolation.
-3. Plot 3D trajectories of both topics.
+3. Plot 2D/3D trajectories of both topics.
 4. Compute error categories similar to plot_navresult.py:
    - position error (x/y/z and norm)
    - velocity error (vx/vy/vz and norm)
@@ -198,7 +198,7 @@ def save_error_csv(path, t, ex, ey, ez, en, evx, evy, evz, evn, eroll, epitch, e
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Compare two odom topics and plot 3D trajectories + errors.")
+    parser = argparse.ArgumentParser(description="Compare two odom topics and plot 2D/3D trajectories + errors.")
     parser.add_argument(
         "--bag",
         default="src/KF-GINS/dataset/test_dataset/rosbag2_2026_02_18-13_05_41",
@@ -231,10 +231,25 @@ def main():
         ref_state, cmp_state
     )
 
-    out_traj = f"{args.out_prefix}_traj3d.png"
+    out_traj_2d = f"{args.out_prefix}_traj2d.png"
+    out_traj_3d = f"{args.out_prefix}_traj3d.png"
     out_err = f"{args.out_prefix}_error.png"
     out_csv = f"{args.out_prefix}_error.csv"
     stride = max(1, int(args.plot_stride))
+
+    fig2d = plt.figure(figsize=(8, 8))
+    ax2d = fig2d.add_subplot(111)
+    ax2d.plot(ref_i["x"][::stride], ref_i["y"][::stride], linewidth=0.9, label=f"ref: {args.ref_topic}")
+    ax2d.plot(cmp_a["x"][::stride], cmp_a["y"][::stride], linewidth=0.9, label=f"cmp: {args.cmp_topic}")
+    ax2d.set_xlabel("X [m]")
+    ax2d.set_ylabel("Y [m]")
+    ax2d.set_title("2D Trajectory Comparison (XY)")
+    ax2d.grid(True)
+    ax2d.axis("equal")
+    ax2d.legend(loc="best")
+    plt.tight_layout()
+    fig2d.savefig(out_traj_2d, dpi=180)
+    plt.close(fig2d)
 
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection="3d")
@@ -247,7 +262,8 @@ def main():
     ax.grid(True)
     ax.legend(loc="best")
     plt.tight_layout()
-    fig.savefig(out_traj, dpi=180)
+    fig.savefig(out_traj_3d, dpi=180)
+    plt.close(fig)
 
     t_rel = t - t[0]
     fig2, axs = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
@@ -294,7 +310,8 @@ def main():
         f"pos_rmse={pos_rmse:.4f} m, pos_p95={pos_p95:.4f} m, pos_max={pos_max:.4f} m, "
         f"vel_rmse={vel_rmse:.4f} m/s, yaw_rmse={att_yaw_rmse:.4f} deg"
     )
-    print(f"traj_png={out_traj}")
+    print(f"traj2d_png={out_traj_2d}")
+    print(f"traj3d_png={out_traj_3d}")
     print(f"err_png={out_err}")
     print(f"err_csv={out_csv}")
 

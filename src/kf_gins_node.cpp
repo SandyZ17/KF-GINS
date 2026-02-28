@@ -5,6 +5,7 @@
 #include <cmath>
 #include <deque>
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <mutex>
 #include <numeric>
@@ -225,6 +226,7 @@ public:
         gnss_pre_gate_min_dt_     = declare_parameter<double>("gnss_pre_gate_min_dt", 0.2);
         gnss_update_mode_name_    = declare_parameter<std::string>("gnss_update_mode", "xyz");
         gnss_nis_gate_mode_name_  = declare_parameter<std::string>("gnss_nis_gate_mode", "xyz");
+        gnss_time_offset_sec_     = declare_parameter<double>("gnss_time_offset_sec", 0.0);
         start_time_               = declare_parameter<double>("start_time", 0.0);
         end_time_                 = declare_parameter<double>("end_time", -1.0);
         use_absolute_time_        = declare_parameter<bool>("use_absolute_time", false);
@@ -263,6 +265,7 @@ public:
         auto_init_max_gyro_std_         = declare_parameter<double>("auto_init_max_gyro_std", 0.1);
         auto_init_yaw_mode_name_        = declare_parameter<std::string>("auto_init_yaw_mode", "gnss_course_or_config");
         auto_init_min_speed_for_yaw_    = declare_parameter<double>("auto_init_min_speed_for_yaw", 1.0);
+        gnss_stats_log_period_sec_      = declare_parameter<double>("gnss_stats_log_period_sec", 5.0);
 
         if (gnss_std_.size() != 3) {
             RCLCPP_WARN(get_logger(), "Parameter 'gnss_std' must be 3 elements. Using default [1,1,2].");
@@ -346,13 +349,17 @@ public:
             const auto period = std::chrono::duration<double>(1.0 / path_publish_rate_);
             path_timer_ = create_wall_timer(period, std::bind(&KfGinsNode::publishPathTimer, this), timer_cb_group_);
         }
+        if (gnss_stats_log_period_sec_ > 0.0) {
+            const auto period = std::chrono::duration<double>(gnss_stats_log_period_sec_);
+            gnss_stats_timer_ =
+                create_wall_timer(period, std::bind(&KfGinsNode::logGnssStatsTimer, this), timer_cb_group_);
+        }
 
         rclcpp::SubscriptionOptions sensor_sub_options;
         sensor_sub_options.callback_group = sensor_cb_group_;
         imu_sub_                          = create_subscription<sensor_msgs::msg::Imu>(
             imu_topic_, rclcpp::SensorDataQoS(), std::bind(&KfGinsNode::imuCallback, this, std::placeholders::_1),
             sensor_sub_options);
-
         gnss_sub_ = create_subscription<sensor_msgs::msg::NavSatFix>(
             gps_topic_, rclcpp::SensorDataQoS(), std::bind(&KfGinsNode::gnssCallback, this, std::placeholders::_1),
             sensor_sub_options);
@@ -595,34 +602,41 @@ private:
     }
 
     void gnssCallback(const sensor_msgs::msg::NavSatFix::SharedPtr msg) {
+        ++gnss_rx_count_;
         const double msg_time = rclcpp::Time(msg->header.stamp).seconds();
+        const double fused_time = msg_time + gnss_time_offset_sec_;
         if (use_absolute_time_) {
-            if (msg_time < start_time_) {
+            if (fused_time < start_time_) {
+                ++gnss_time_window_drop_count_;
                 return;
             }
-            if (end_time_ > 0.0 && msg_time > end_time_) {
+            if (end_time_ > 0.0 && fused_time > end_time_) {
+                ++gnss_time_window_drop_count_;
                 return;
             }
         } else {
             if (!base_time_set_) {
-                base_time_     = msg_time;
+                base_time_     = fused_time;
                 base_time_set_ = true;
             }
-            const double rel_time = msg_time - base_time_;
+            const double rel_time = fused_time - base_time_;
             if (rel_time < start_time_) {
+                ++gnss_time_window_drop_count_;
                 return;
             }
             if (end_time_ > 0.0 && rel_time > end_time_) {
+                ++gnss_time_window_drop_count_;
                 return;
             }
         }
         if (msg->status.status < sensor_msgs::msg::NavSatStatus::STATUS_FIX) {
+            ++gnss_status_drop_count_;
             return;
         }
 
         GnssSample sample;
         sample.stamp       = msg->header.stamp;
-        sample.gnss.time   = rclcpp::Time(sample.stamp).seconds();
+        sample.gnss.time   = fused_time;
         sample.gnss.blh[0] = msg->latitude * D2R;
         sample.gnss.blh[1] = msg->longitude * D2R;
         sample.gnss.blh[2] = msg->altitude;
@@ -642,6 +656,7 @@ private:
             sample.gnss.std = Eigen::Vector3d(gnss_std_[0], gnss_std_[1], gnss_std_[2]);
         }
         if (gnss_pre_gate_enable_ && shouldRejectGnssPreGate(sample, used_cov)) {
+            ++gnss_pregate_drop_count_;
             return;
         }
 
@@ -680,6 +695,7 @@ private:
         }
 
         gnss_queue_.push_back(sample);
+        ++gnss_enqueue_count_;
         latest_gnss_time_ = sample.gnss.time;
         trimQueue(gnss_queue_);
         process();
@@ -707,13 +723,25 @@ private:
             const ImuSample sample = imu_queue_.front();
             imu_queue_.pop_front();
 
+            const double imu_prev_time = sample.imu.time - sample.imu.dt;
             while (!gnss_queue_.empty() && gnss_queue_.front().gnss.time <= sample.imu.time) {
-                giengine_->addGnssData(gnss_queue_.front().gnss);
+                const auto gnss_sample = gnss_queue_.front().gnss;
                 gnss_queue_.pop_front();
+                if (gnss_sample.time < imu_prev_time - 1e-6) {
+                    ++gnss_stale_before_imu_count_;
+                }
+                // Keep original behavior: still pass GNSS to GIEngine.
+                giengine_->addGnssData(gnss_sample);
+                ++gnss_to_engine_count_;
             }
 
+            const uint64_t nis_seq_before = giengine_->getLastNISSeq();
             giengine_->addImuData(sample.imu);
             giengine_->newImuProcess();
+            const uint64_t nis_seq_after = giengine_->getLastNISSeq();
+            if (nis_seq_after > nis_seq_before) {
+                gnss_update_count_ += (nis_seq_after - nis_seq_before);
+            }
             if (shouldPublish(sample.imu.time)) {
                 if (!publishing_enabled_) {
                     publishing_enabled_ = true;
@@ -768,6 +796,42 @@ private:
         imu_queue_.pop_front();
         initialized_ = true;
         RCLCPP_INFO(get_logger(), "KF-GINS initialized. Start processing.");
+    }
+
+    void logGnssStatsTimer() {
+        const uint64_t rx       = gnss_rx_count_.load();
+        const uint64_t enq      = gnss_enqueue_count_.load();
+        const uint64_t to_eng   = gnss_to_engine_count_.load();
+        const uint64_t updates  = gnss_update_count_.load();
+        const uint64_t drop_t   = gnss_time_window_drop_count_.load();
+        const uint64_t drop_s   = gnss_status_drop_count_.load();
+        const uint64_t drop_pre = gnss_pregate_drop_count_.load();
+        const uint64_t stale    = gnss_stale_before_imu_count_.load();
+
+        const uint64_t d_rx       = rx - last_gnss_rx_log_;
+        const uint64_t d_enq      = enq - last_gnss_enq_log_;
+        const uint64_t d_to_eng   = to_eng - last_gnss_to_engine_log_;
+        const uint64_t d_updates  = updates - last_gnss_updates_log_;
+        const uint64_t d_drop_t   = drop_t - last_gnss_drop_time_log_;
+        const uint64_t d_drop_s   = drop_s - last_gnss_drop_status_log_;
+        const uint64_t d_drop_pre = drop_pre - last_gnss_drop_pregate_log_;
+        const uint64_t d_stale    = stale - last_gnss_stale_log_;
+
+        last_gnss_rx_log_           = rx;
+        last_gnss_enq_log_          = enq;
+        last_gnss_to_engine_log_    = to_eng;
+        last_gnss_updates_log_      = updates;
+        last_gnss_drop_time_log_    = drop_t;
+        last_gnss_drop_status_log_  = drop_s;
+        last_gnss_drop_pregate_log_ = drop_pre;
+        last_gnss_stale_log_        = stale;
+
+        RCLCPP_INFO(
+            get_logger(),
+            "[GNSS-STATS] total(rx=%lu enq=%lu to_engine=%lu updates=%lu stale=%lu drop_time=%lu drop_status=%lu "
+            "drop_pregate=%lu) delta(rx=%lu enq=%lu to_engine=%lu updates=%lu stale=%lu dt=%lu ds=%lu dp=%lu)",
+            rx, enq, to_eng, updates, stale, drop_t, drop_s, drop_pre, d_rx, d_enq, d_to_eng, d_updates, d_stale,
+            d_drop_t, d_drop_s, d_drop_pre);
     }
 
     static double vecMedian(std::vector<double> v) {
@@ -1335,6 +1399,7 @@ private:
     double prev_gnss_time_for_pregate_{-1.0};
     std::string gnss_update_mode_name_{"xyz"};
     std::string gnss_nis_gate_mode_name_{"xyz"};
+    double gnss_time_offset_sec_{0.0};
     double start_time_{0.0};
     double end_time_{-1.0};
     bool use_absolute_time_{false};
@@ -1367,6 +1432,7 @@ private:
     std::string auto_init_yaw_mode_name_{"gnss_course_or_config"};
     AutoInitYawMode auto_init_yaw_mode_{AutoInitYawMode::GNSS_COURSE_OR_CONFIG};
     double auto_init_min_speed_for_yaw_{1.0};
+    double gnss_stats_log_period_sec_{5.0};
     bool auto_init_wait_log_printed_{false};
     bool have_prev_gnss_fix_for_course_{false};
     Eigen::Vector3d prev_gnss_blh_for_course_{0.0, 0.0, 0.0};
@@ -1406,6 +1472,22 @@ private:
     bool have_navsat_{false};
     bool have_input_{false};
     uint64_t last_published_nis_seq_{0};
+    std::atomic<uint64_t> gnss_rx_count_{0};
+    std::atomic<uint64_t> gnss_enqueue_count_{0};
+    std::atomic<uint64_t> gnss_to_engine_count_{0};
+    std::atomic<uint64_t> gnss_update_count_{0};
+    std::atomic<uint64_t> gnss_time_window_drop_count_{0};
+    std::atomic<uint64_t> gnss_status_drop_count_{0};
+    std::atomic<uint64_t> gnss_pregate_drop_count_{0};
+    std::atomic<uint64_t> gnss_stale_before_imu_count_{0};
+    uint64_t last_gnss_rx_log_{0};
+    uint64_t last_gnss_enq_log_{0};
+    uint64_t last_gnss_to_engine_log_{0};
+    uint64_t last_gnss_updates_log_{0};
+    uint64_t last_gnss_drop_time_log_{0};
+    uint64_t last_gnss_drop_status_log_{0};
+    uint64_t last_gnss_drop_pregate_log_{0};
+    uint64_t last_gnss_stale_log_{0};
     bool have_single_gnss_course_heading_{false};
     double latest_single_gnss_course_yaw_enu_{0.0};
     double latest_single_gnss_course_speed_{0.0};
@@ -1416,6 +1498,7 @@ private:
     rclcpp::TimerBase::SharedPtr odom_timer_;
     rclcpp::TimerBase::SharedPtr navsat_timer_;
     rclcpp::TimerBase::SharedPtr path_timer_;
+    rclcpp::TimerBase::SharedPtr gnss_stats_timer_;
     rclcpp::CallbackGroup::SharedPtr sensor_cb_group_;
     rclcpp::CallbackGroup::SharedPtr timer_cb_group_;
 };

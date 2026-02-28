@@ -50,7 +50,7 @@ def run_cmd(cmd, desc):
     return True
 
 
-def analyze_nis(bag_dir: str, topic: str, out_dir: str):
+def analyze_nis(bag_dir: str, topic: str, out_dir: str, nis_mode: str = "xyz"):
     reader = SequentialReader()
     reader.open(
         StorageOptions(uri=bag_dir, storage_id="sqlite3"),
@@ -76,11 +76,21 @@ def analyze_nis(bag_dir: str, topic: str, out_dir: str):
     t = np.arange(len(nis), dtype=float)
     os.makedirs(out_dir, exist_ok=True)
 
-    q95 = 7.814727903251179  # chi2 quantile, dof=3, p=0.95
-    q99 = 11.344866730144373  # dof=3, p=0.99
+    if nis_mode == "xy":
+        dof = 2
+        q95 = 5.991464547107979  # chi2 quantile, dof=2, p=0.95
+        q99 = 9.21034037197618  # dof=2, p=0.99
+    else:
+        dof = 3
+        q95 = 7.814727903251179  # chi2 quantile, dof=3, p=0.95
+        q99 = 11.344866730144373  # dof=3, p=0.99
 
     metrics = {
         "count": int(len(nis)),
+        "nis_mode": nis_mode,
+        "chi2_dof": dof,
+        "chi2_q95": q95,
+        "chi2_q99": q99,
         "mean": float(np.mean(nis)),
         "median": float(np.median(nis)),
         "std": float(np.std(nis)),
@@ -93,8 +103,8 @@ def analyze_nis(bag_dir: str, topic: str, out_dir: str):
 
     fig = plt.figure(figsize=(12, 4))
     plt.plot(t, nis, linewidth=0.8)
-    plt.axhline(q95, color="orange", linestyle="--", label="chi2 dof=3 @95%")
-    plt.axhline(q99, color="red", linestyle="--", label="chi2 dof=3 @99%")
+    plt.axhline(q95, color="orange", linestyle="--", label=f"chi2 dof={dof} @95%")
+    plt.axhline(q99, color="red", linestyle="--", label=f"chi2 dof={dof} @99%")
     plt.xlabel("GNSS Update Index")
     plt.ylabel("NIS")
     plt.title("NIS Time Series")
@@ -128,8 +138,15 @@ def analyze_nis(bag_dir: str, topic: str, out_dir: str):
             w.writerow([k, v])
 
     print(
-        "[OK] NIS: count={}, mean={:.3f}, p95={:.3f}, p99={:.3f}, >7.81={:.2%}".format(
-            metrics["count"], metrics["mean"], metrics["p95"], metrics["p99"], metrics["exceed_chi2_95_ratio"]
+        "[OK] NIS ({mode}, dof={dof}): count={count}, mean={mean:.3f}, p95={p95:.3f}, p99={p99:.3f}, >q95({q95:.2f})={ratio:.2%}".format(
+            mode=metrics["nis_mode"],
+            dof=metrics["chi2_dof"],
+            count=metrics["count"],
+            mean=metrics["mean"],
+            p95=metrics["p95"],
+            p99=metrics["p99"],
+            q95=metrics["chi2_q95"],
+            ratio=metrics["exceed_chi2_95_ratio"],
         )
     )
 
@@ -150,6 +167,12 @@ def main():
     parser.add_argument("--odom-fused-topic", default="/kf_gins/odom_fused")
     parser.add_argument("--imu-topic", default="/imu/data")
     parser.add_argument("--nis-topic", default="/kf_gins/nis")
+    parser.add_argument(
+        "--nis-mode",
+        choices=["xy", "xyz"],
+        default="xyz",
+        help="NIS evaluation dimension mode. Use 'xy' for 2D update, 'xyz' for 3D update.",
+    )
     parser.add_argument("--segment-start-sec", type=float, default=None)
     parser.add_argument("--segment-end-sec", type=float, default=None)
     args = parser.parse_args()
@@ -318,7 +341,7 @@ def main():
     if "nis" in modes:
         if args.nis_topic in topics:
             try:
-                analyze_nis(bag, args.nis_topic, str(out_root / "nis"))
+                analyze_nis(bag, args.nis_topic, str(out_root / "nis"), args.nis_mode)
             except Exception as e:
                 print(f"[WARN] NIS analysis failed: {e}")
         else:
