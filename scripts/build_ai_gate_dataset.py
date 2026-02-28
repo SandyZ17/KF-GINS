@@ -39,8 +39,11 @@ ROOT = Path(__file__).resolve().parents[1]  # src/KF-GINS
 
 @dataclass
 class LabelProfile:
-    pos_xy_good_m: float
-    pos_xy_bad_m: float
+    mode: str
+    pos_xy_good_m: float | None = None
+    pos_xy_bad_m: float | None = None
+    q_reliable: float | None = None
+    q_unreliable: float | None = None
 
 
 def load_yaml(path: Path) -> Dict[str, Any]:
@@ -128,27 +131,71 @@ def iter_error_rows(err_csv: Path) -> Iterable[Dict[str, float]]:
             }
 
 
-def label_row(row: Dict[str, float], profile: LabelProfile) -> str:
-    if row["err_xy"] <= profile.pos_xy_good_m:
-        return "reliable"
-    if row["err_xy"] >= profile.pos_xy_bad_m:
-        return "unreliable"
-    return "uncertain"
+def quantile(vals: List[float], q: float) -> float:
+    s = sorted(vals)
+    if not s:
+        return float("nan")
+    idx = (len(s) - 1) * q
+    lo = int(idx)
+    hi = min(lo + 1, len(s) - 1)
+    w = idx - lo
+    return s[lo] * (1 - w) + s[hi] * w
 
 
-def build_dataset(ds_name: str, ds: Dict[str, Any], profile_name: str, profile: LabelProfile) -> Dict[str, Any]:
+def make_labeler(rows: List[Dict[str, float]], profile: LabelProfile):
+    if profile.mode == "threshold_xy":
+        good = float(profile.pos_xy_good_m)
+        bad = float(profile.pos_xy_bad_m)
+
+        def _label(row: Dict[str, float]) -> str:
+            if row["err_xy"] <= good:
+                return "reliable"
+            if row["err_xy"] >= bad:
+                return "unreliable"
+            return "uncertain"
+
+        return _label, {"mode": profile.mode, "pos_xy_good_m": good, "pos_xy_bad_m": bad}
+
+    if profile.mode == "quantile_xy":
+        q_rel = float(profile.q_reliable)
+        q_unrel = float(profile.q_unreliable)
+        errs = [r["err_xy"] for r in rows]
+        thr_rel = quantile(errs, q_rel)
+        thr_unrel = quantile(errs, q_unrel)
+
+        def _label(row: Dict[str, float]) -> str:
+            if row["err_xy"] <= thr_rel:
+                return "reliable"
+            if row["err_xy"] >= thr_unrel:
+                return "unreliable"
+            return "uncertain"
+
+        return _label, {
+            "mode": profile.mode,
+            "q_reliable": q_rel,
+            "q_unreliable": q_unrel,
+            "thr_reliable_xy_m": thr_rel,
+            "thr_unreliable_xy_m": thr_unrel,
+        }
+
+    raise RuntimeError(f"Unsupported label profile mode: {profile.mode}")
+
+
+def build_dataset(ds_name: str, ds: Dict[str, Any], profile_name: str, profile: LabelProfile, output_tag: str = "") -> Dict[str, Any]:
     err_csv = ensure_truth_analysis(ds)
     out_dir = resolve_workspace_path(ds["build_out_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    samples_csv = out_dir / "ai_gate_label_samples.csv"
-    summary_json = out_dir / "ai_gate_label_summary.json"
+    suffix = f"_{output_tag}" if output_tag else ""
+    samples_csv = out_dir / f"ai_gate_label_samples{suffix}.csv"
+    summary_json = out_dir / f"ai_gate_label_summary{suffix}.json"
 
     rows = list(iter_error_rows(err_csv))
+    labeler, profile_runtime = make_labeler(rows, profile)
     labeled: List[Dict[str, Any]] = []
     counts = {"reliable": 0, "uncertain": 0, "unreliable": 0}
     for row in rows:
-        label = label_row(row, profile)
+        label = labeler(row)
         counts[label] += 1
         labeled.append({
             "dataset": ds_name,
@@ -179,6 +226,7 @@ def build_dataset(ds_name: str, ds: Dict[str, Any], profile_name: str, profile: 
     summary = {
         "dataset": ds_name,
         "label_profile": profile_name,
+        "label_profile_runtime": profile_runtime,
         "source_bag": ds["bag"],
         "source_truth": ds["truth"],
         "truth_format": ds.get("truth_format", "auto"),
@@ -215,6 +263,7 @@ def parse_args() -> argparse.Namespace:
         "--label-profile-file",
         default="src/KF-GINS/docs/ai_gating_design/labeling_profiles.yaml",
     )
+    ap.add_argument("--output-tag", default="", help="Suffix for output files, e.g. layered_v1")
     return ap.parse_args()
 
 
@@ -231,16 +280,19 @@ def main() -> None:
         raise SystemExit(f"Label profile not found: {args.label_profile}")
 
     p = profiles[args.label_profile]
+    mode = p.get("mode", "threshold_xy")
     profile = LabelProfile(
-        pos_xy_good_m=float(p["pos_xy_good_m"]),
-        pos_xy_bad_m=float(p["pos_xy_bad_m"]),
+        mode=mode,
+        pos_xy_good_m=float(p["pos_xy_good_m"]) if "pos_xy_good_m" in p else None,
+        pos_xy_bad_m=float(p["pos_xy_bad_m"]) if "pos_xy_bad_m" in p else None,
+        q_reliable=float(p["q_reliable"]) if "q_reliable" in p else None,
+        q_unreliable=float(p["q_unreliable"]) if "q_unreliable" in p else None,
     )
 
-    summary = build_dataset(args.dataset, datasets[args.dataset], args.label_profile, profile)
+    summary = build_dataset(args.dataset, datasets[args.dataset], args.label_profile, profile, output_tag=args.output_tag)
     print("[DONE] AI gate label dataset generated")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
     main()
-

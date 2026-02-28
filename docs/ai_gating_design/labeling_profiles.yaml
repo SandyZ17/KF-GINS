@@ -16,3 +16,11 @@ profiles:
       unreliable if err_xy >= pos_xy_bad_m
       uncertain otherwise
 
+  urban_layered_quantile_xy:
+    mode: quantile_xy
+    q_reliable: 0.30
+    q_unreliable: 0.70
+    label_rule: |
+      reliable if err_xy <= q30
+      unreliable if err_xy >= q70
+      uncertain otherwise

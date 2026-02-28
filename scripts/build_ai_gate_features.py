@@ -361,6 +361,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--gps-match-max-dt", type=float, default=0.2)
     ap.add_argument("--odom-match-max-dt", type=float, default=0.05)
     ap.add_argument("--nis-prev-max-age", type=float, default=5.0)
+    ap.add_argument("--label-csv", default="", help="Optional label CSV path override")
+    ap.add_argument("--output-tag", default="", help="Suffix for output feature files")
     ap.add_argument(
         "--nis-align-mode",
         choices=["auto", "timestamp", "sequence"],
@@ -376,7 +378,10 @@ def main() -> None:
     ds = src_cfg["datasets"][args.dataset]
 
     build_dir = resolve_workspace_path(ds["build_out_dir"])
-    label_csv = build_dir / "ai_gate_label_samples.csv"
+    if args.label_csv:
+        label_csv = resolve_workspace_path(args.label_csv)
+    else:
+        label_csv = build_dir / "ai_gate_label_samples.csv"
     if not label_csv.exists():
         raise SystemExit(f"Label CSV not found. Run build_ai_gate_dataset.py first: {label_csv}")
 
@@ -395,8 +400,9 @@ def main() -> None:
         nis_align_mode=args.nis_align_mode,
     )
 
-    feat_csv = build_dir / "ai_gate_features.csv"
-    feat_summary = build_dir / "ai_gate_features_summary.json"
+    suffix = f"_{args.output_tag}" if args.output_tag else ""
+    feat_csv = build_dir / f"ai_gate_features{suffix}.csv"
+    feat_summary = build_dir / f"ai_gate_features_summary{suffix}.json"
     write_csv(feat_csv, rows)
 
     extra = {
