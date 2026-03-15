@@ -130,7 +130,7 @@ def main() -> None:
     plt.axis("equal")
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    fig.savefig(os.path.join(args.out_dir, "flatness_heatmap_xy.png"), dpi=220)
+    fig.savefig(os.path.join(args.out_dir, "flatness_heatmap_xy.svg"), dpi=600)
     plt.close(fig)
 
     # 2) Along-track profile
@@ -143,7 +143,7 @@ def main() -> None:
     plt.grid(True, alpha=0.3)
     plt.legend(loc="best")
     plt.tight_layout()
-    fig.savefig(os.path.join(args.out_dir, "flatness_profile.png"), dpi=220)
+    fig.savefig(os.path.join(args.out_dir, "flatness_profile.svg"), dpi=600)
     plt.close(fig)
 
     # 3) Histogram + CDF
@@ -159,7 +159,7 @@ def main() -> None:
     ax2.set_ylabel("CDF(|residual|)")
     plt.title("Residual Distribution")
     plt.tight_layout()
-    fig.savefig(os.path.join(args.out_dir, "flatness_hist_cdf.png"), dpi=220)
+    fig.savefig(os.path.join(args.out_dir, "flatness_hist_cdf.svg"), dpi=600)
     plt.close(fig)
 
     # 4) Spatial PSD (residual vs distance)
@@ -184,7 +184,7 @@ def main() -> None:
             plt.title("Spatial PSD of Height Residual")
             plt.grid(True, which="both", alpha=0.3)
             plt.tight_layout()
-            fig.savefig(os.path.join(args.out_dir, "flatness_psd.png"), dpi=220)
+            fig.savefig(os.path.join(args.out_dir, "flatness_psd.svg"), dpi=600)
             plt.close(fig)
 
     metrics_path = os.path.join(args.out_dir, "flatness_metrics.csv")

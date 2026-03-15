@@ -128,6 +128,10 @@ public:
         return last_nis_seq_;
     }
 
+    void setGnssNisGateEnabled(bool enabled) {
+        options_.gnss_nis_gate_enable = enabled;
+    }
+
     /**
      * @brief 获取当前状态协方差
      *        get current state covariance
@@ -245,7 +249,14 @@ private:
     /**
      * @brief NIS gating for measurement updates. Returns true if the update should be rejected.
      * */
-    bool shouldRejectUpdateByNIS(double nis, int meas_dim);
+    bool shouldRejectUpdateByNIS(double nis, int meas_dim, const Eigen::VectorXd *innov = nullptr,
+                                 const Eigen::MatrixXd *S = nullptr, const Eigen::MatrixXd *R = nullptr);
+
+    /**
+     * @brief Compute NIS on gate-mode-selected dimensions from innovation and innovation covariance.
+     *        For gnss_nis_gate_mode=xy, use XY subspace when available.
+     * */
+    double computeNISByGateMode(const Eigen::VectorXd &innov, const Eigen::MatrixXd &S, int meas_dim, int &gate_dim) const;
 
     /**
      * @brief 反馈误差状态到当前状态

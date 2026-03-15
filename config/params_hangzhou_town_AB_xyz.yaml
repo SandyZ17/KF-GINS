@@ -34,6 +34,8 @@ kf_gins_node:
     navsat_publish_rate: 30.0
     publish_navsat: true
     publish_nis: true
+    export_measurements: true
+    export_measurements_dir: "/home/sandyz/Documents/navigation/kf_gins_ws/src/KF-GINS/results/A_B_xyz_measurements_latest"
 
     # 输出/滤波
     output_enu: true
@@ -43,17 +45,34 @@ kf_gins_node:
     ukf_beta: 2.0
     ukf_kappa: 0.0
 
-    # 航向融合模式（当前single为发布侧融合，dual为接口预留）
+    # 航向融合模式
+    # - single_gnss_course: 单天线GNSS航向，仅作用于发布侧航向平滑
+    # - dual_gnss_heading: 双天线航向，可用于auto-init yaw和发布侧航向平滑
     heading_fusion_enable: false
     heading_mode: "none" # none / single_gnss_course / dual_gnss_heading
     heading_fallback_to_imu: true
     single_heading_min_speed: 1.0
     single_heading_std_deg: 5.0
     single_heading_blend_gain: 0.2
+    dual_heading_enable: false
     dual_heading_topic: "/gnss/dual_heading"
+    dual_heading_unit: "deg" # deg / rad
+    dual_heading_timeout_sec: 0.5
+    dual_heading_offset_deg: 0.0
+    dual_heading_blend_gain: 0.5
     dual_heading_std_deg: 1.0
     dual_heading_quality_gate: true
     dual_heading_nis_gate: true
+
+    # 车速输入
+    # 当前仅用于auto-init阶段的初始速度注入，尚未接入GIEngine速度观测更新
+    wheel_speed_enable: false
+    wheel_speed_topic: "/vehicle/wheel_speed"
+    wheel_speed_timeout_sec: 0.5
+    wheel_speed_std_mps: 0.5
+    wheel_speed_use_for_auto_init_vel: false
+    wheel_speed_slip_gate_enable: true
+    wheel_speed_max_vs_gnss_diff_mps: 3.0
 
     # IMU 数据轴向
     # test1_bag IMU 按 ROS FLU 处理（由用户确认）
@@ -78,36 +97,55 @@ kf_gins_node:
     # Tuned by first-40s odom_pred-vs-gps trajectory alignment.
     use_navsatfix_covariance: true
     gnss_std: [0.1, 0.1, 6.0]
-    gnss_pre_gate_enable: false
-    gnss_pre_gate_max_hstd: -1.0
-    gnss_pre_gate_max_vstd: -1.0
-    gnss_pre_gate_max_speed: -1.0
+    navsat_cov_scale: 2.0
+    navsat_cov_min_std_xy: 0.35
+    navsat_cov_min_std_z: 1.00
+    gnss_pre_gate_enable: true
+    gnss_pre_gate_max_hstd: 2.0
+    gnss_pre_gate_max_vstd: 5.0
+    gnss_pre_gate_max_speed: 15.0
     gnss_pre_gate_min_dt: 0.2
-    # Tuned on test1_bag first-40s trajectory alignment.
+    # Tuned by offline CSV replay.
     gnss_time_offset_sec: 0.10
-    # >0时启用：当GPS持续FIX达到该时长(秒)后，
-    # 使用“进入FIX时刻”的GPS位置作为起点(initpos/origin)。
-    gps_fix_origin_hold_sec: 5.0
-    gnss_update_mode: "xy"
-    gnss_nis_gate_mode: "xy" # NIS计算维度: xyz / xy（可与 gnss_update_mode 解耦）
+    # Ignored when auto_init_enable=true.
+    gps_fix_origin_hold_sec: 0.0
+    gnss_update_mode: "xyz"
+    gnss_nis_gate_mode: "xyz" # NIS计算维度: xyz / xy（可与 gnss_update_mode 解耦）
     gnss_nis_gate_enable: false
-    gnss_nis_gate_threshold: 9.21 # xyz模式3D位置卡方99%门限
+    gnss_nis_gate_threshold: 11.34 # xyz模式3D位置卡方99%门限
+    gnss_nis_gate_delay_sec: 20.0
+    gnss_nis_gate_min_speed: 0.5
 
-    # 自动初始化（本配置使用给定初值，默认关闭）
-    auto_init_enable: false
+    # 自动初始化：无轮速计车载保守模式
+    # - 必须满足静止IMU窗口才允许初始化
+    # - 初始化后前N秒不输出正式odom/path/navsat
+    # - yaw先使用配置值；后续如接双天线可切到dual_heading模式
+    auto_init_enable: true
     auto_init_pos_only: false
-    auto_init_gnss_window_sec: 8.0
+    auto_init_gnss_window_sec: 5.0
     auto_init_imu_window_sec: 3.0
+    auto_init_split_rp_yaw: false
+    auto_init_rp_window_sec: 3.0
+    auto_init_rp_search_max_sec: 8.0
     auto_init_min_gnss_samples: 5
     auto_init_min_imu_samples: 100
     auto_init_use_gnss_median: true
     auto_init_reject_gnss_outlier: true
     auto_init_gnss_outlier_sigma: 3.5
-    auto_init_require_static_rp: false
+    auto_init_require_static_rp: true
+    auto_init_require_full_gnss_window: true
+    auto_init_require_full_imu_window: true
+    auto_init_require_motion_for_yaw: false
+    auto_init_min_displacement_for_yaw: 3.0
     auto_init_max_acc_std: 0.5
     auto_init_max_gyro_std: 0.1
-    auto_init_yaw_mode: "gnss_course_or_config"
-    auto_init_min_speed_for_yaw: 1.0
+    # auto_init yaw模式:
+    # - config_only
+    # - gnss_course_or_config
+    # - dual_heading_or_gnss_course_or_config
+    auto_init_yaw_mode: "config_only"
+    auto_init_min_speed_for_yaw: 0.3
+    post_init_output_delay_sec: 20.0
 
     # KF-GINS 初始状态
     # Seeded from first /gps/fix sample in test1_bag.
@@ -123,9 +161,12 @@ kf_gins_node:
     initgyrscale: [0.0, 0.0, 0.0] # [ppm]
     initaccscale: [0.0, 0.0, 0.0] # [ppm]
 
-    # Initial STD (test1_bag 经验值，沿用 params_dataset.yaml)
-    initposstd: [0.005, 0.004, 0.008] # [m]
-    initvelstd: [0.003, 0.004, 0.004] # [m/s]
+    # Initial STD
+    # original before tuning:
+    # initposstd: [0.005, 0.004, 0.008]
+    # initvelstd: [0.003, 0.004, 0.004]
+    initposstd: [1.0, 1.0, 1.0] # [m]
+    initvelstd: [0.3, 0.3, 0.3] # [m/s]
     initattstd: [0.003, 0.003, 0.023] # [deg]
 
     # IMU 噪声参数（由 imu_calibr_bag 估计，dt~0.01s）
@@ -142,4 +183,4 @@ kf_gins_node:
 
     # 天线杆臂 (KF-GINS expects FRD: x-forward, y-right, z-down)
     # antlever: [-0.107, -0.310, 0.00] # [m]
-    antlever: [0.00, 0.00, 0.00] # [m]
+    antlever: [0.00, 0.00, 0.15] # [m]

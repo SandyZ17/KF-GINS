@@ -1,16 +1,14 @@
 kf_gins_node:
   ros__parameters:
     # XY-only evaluation variant (GNSS horizontal-only update + 2D NIS gate mode)
-    # UrbanNav-HK-Tunnel-1 (UrbanNav-HK_CHTunnel-20210518)
-    # Use with:
-    # 1) sensor bag: .../UrbanNav-HK_CHTunnel-20210518_sensors_ros2
-    # 2) reference bag converted from INSPVAX: .../UrbanNav-HK_CHTunnel-20210518_inspvax_ref_ros2
-    # If you want KF-GINS to consume a GNSS topic, you need to play a bag that contains
-    # /reference/inspvax/navsatfix (e.g. merge the two bags or replay both with /clock).
+    # Dataset: src/KF-GINS/dataset/test1_bag
+    # Bag topics (from metadata.yaml):
+    # - IMU: /imu_data (sensor_msgs/msg/Imu, ~100 Hz)
+    # - GNSS: /gps/fix (sensor_msgs/msg/NavSatFix, ~10 Hz)
 
     # 订阅话题
-    imu_topic: "/imu/data" # sensor_msgs/Imu (UrbanNav sensors bag)
-    gps_topic: "/reference/inspvax/navsatfix" # sensor_msgs/NavSatFix (from INSPVAX reference bag; pseudo-GNSS for testing)
+    imu_topic: "/imu_data" # sensor_msgs/Imu (test1_bag)
+    gps_topic: "/gps/fix" # sensor_msgs/NavSatFix (test1_bag)
 
     # 发布话题
     odom_topic: "/kf_gins/odom_pred"
@@ -58,13 +56,13 @@ kf_gins_node:
     dual_heading_nis_gate: true
 
     # IMU 数据轴向
-    # UrbanNav /imu/data is ROS sensor_msgs/Imu convention (FLU) in most sequences.
+    # test1_bag IMU 按 ROS FLU 处理（由用户确认）
     imu_in_flu: true
 
     # IMU 时间/频率
-    imu_rate: 400.0 # UrbanNav /imu/data ~400 Hz (159459 msgs / 398.6 s)
+    imu_rate: 100.0 # test1_bag /imu_data: 33470 msgs / 334.689 s ~= 100 Hz
     max_imu_dt: 0.1
-    max_imu_ahead: 1.0
+    max_imu_ahead: 0.0
 
     # 数据时间窗口
     use_wall_time_stamp: false
@@ -76,18 +74,23 @@ kf_gins_node:
     max_queue_size: 5000
 
     # GNSS 噪声
-    # INSPVAX-derived NavSatFix may carry zero covariance in many frames, so provide fallback.
+    # test1_bag NavSatFix covariance is overly optimistic in many epochs (cm-level),
+    # which can inflate NIS. Use fixed conservative GNSS std for stable update weighting.
     use_navsatfix_covariance: true
-    gnss_std: [1.0, 1.0, 2.0]
+    gnss_std: [0.1, 0.1, 6.0]
     gnss_pre_gate_enable: false
     gnss_pre_gate_max_hstd: -1.0
     gnss_pre_gate_max_vstd: -1.0
     gnss_pre_gate_max_speed: -1.0
     gnss_pre_gate_min_dt: 0.2
-    gnss_update_mode: "xy" # UrbanNav对比常看3D/位置一致性，默认保持xyz
-    gnss_nis_gate_mode: "xy" # 当前实现要求与 gnss_update_mode 一致
+    # test1_bag: GNSS header stamp is about 0.18s behind IMU header stamp.
+    # Apply positive offset so GNSS can enter the IMU update window.
+    gnss_time_offset_sec: 0.10
+    gps_fix_origin_hold_sec: 5.0
+    gnss_update_mode: "xyz" # UrbanNav对比常看3D/位置一致性，默认保持xyz
+    gnss_nis_gate_mode: "xyz" # 当前实现要求与 gnss_update_mode 一致
     gnss_nis_gate_enable: false
-    gnss_nis_gate_threshold: 9.21 # xyz模式3D位置卡方99%门限
+    gnss_nis_gate_threshold: 11.34 # xyz模式3D位置卡方99%门限
 
     # 自动初始化（本配置使用给定初值，默认关闭）
     auto_init_enable: false
@@ -106,34 +109,36 @@ kf_gins_node:
     auto_init_min_speed_for_yaw: 1.0
 
     # KF-GINS 初始状态
-    # Seeded from first /novatel_data/inspvax sample (SPAN-CPT post-processed reference).
+    # Seeded from first /gps/fix sample in test1_bag.
     # position: [lat(deg), lon(deg), h(m)]
-    initpos: [22.3021422, 114.180467011111, 3.69]
+    initpos: [30.33168953713, 120.28127989875, 7.8695]
     # velocity in KF-GINS nav-frame NED => [vn, ve, vd]
-    initvel: [-0.007, -0.003, 0.006]
+    initvel: [0.0, 0.0, 0.0]
     # attitude in KF-GINS internal convention [roll, pitch, yaw] [deg]
-    initatt: [0.0318106168, 0.4630014647, -173.804169254]
+    initatt: [0.0, 0.0, 0.0]
 
     initgyrbias: [0.0, 0.0, 0.0] # [deg/h]
     initaccbias: [0.0, 0.0, 0.0] # [mGal]
     initgyrscale: [0.0, 0.0, 0.0] # [ppm]
     initaccscale: [0.0, 0.0, 0.0] # [ppm]
 
-    # Initial STD (conservative defaults; tune per experiment)
-    initposstd: [1.0, 1.0, 2.0] # [m]
-    initvelstd: [0.1, 0.1, 0.1] # [m/s]
-    initattstd: [1.0, 1.0, 2.0] # [deg]
+    # Initial STD (test1_bag 经验值，沿用 params_dataset.yaml)
+    initposstd: [0.005, 0.004, 0.008] # [m]
+    initvelstd: [0.003, 0.004, 0.004] # [m/s]
+    initattstd: [0.003, 0.003, 0.023] # [deg]
 
-    # IMU 噪声参数 (generated from UrbanNav imu_noise.yaml avg-axis, approximate unit mapping)
+    # IMU 噪声参数（由 imu_calibr_bag 估计，dt~0.01s）
+    # arw/vrw: 全段白噪声估计
+    # gbstd/abstd: 20s 分块均值标准差估计（bias 量级）
     imunoise:
-      arw: [35.30877, 35.30877, 35.30877] # [deg/sqrt(hr)]  (verify against dataset unit interpretation)
-      vrw: [0.671845, 0.671845, 0.671845] # [m/s/sqrt(hr)] (verify against dataset unit interpretation)
-      gbstd: [18.843401, 18.843401, 18.843401] # [deg/hr]  approx
-      abstd: [11.751768, 11.751768, 11.751768] # [mGal]    approx
+      arw: [0.429026, 0.103974, 0.170860] # [deg/sqrt(hr)]
+      vrw: [0.057574, 0.179966, 0.112667] # [m/s/sqrt(hr)]
+      gbstd: [2.060401, 1.968752, 1.578466] # [deg/hr]
+      abstd: [10.714094, 28.014407, 49.620160] # [mGal]
       gsstd: [300.0, 300.0, 300.0] # [ppm]
       asstd: [300.0, 300.0, 300.0] # [ppm]
       corrtime: 4.0 # [hr]
 
     # 天线杆臂 (KF-GINS expects FRD: x-forward, y-right, z-down)
-    # Converted from UrbanNav ANTENNA_T_IMU comment convention (x-right, y-forward, z-up)
-    antlever: [0.86, 0.0, 0.31] # [m]
+    # test1_bag 经验值（与 params_dataset.yaml 一致）
+    antlever: [0.0, 0.0, 0.15] # [m]

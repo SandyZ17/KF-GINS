@@ -8,12 +8,12 @@ This script is intentionally conservative:
 - It does NOT yet extract full online GNSS/NIS feature vectors from rosbag (phase 2)
 
 Recommended usage:
-  python3 src/KF-GINS/scripts/build_ai_gate_dataset.py \
+  python3 src/KF-GINS/scripts/ai_gate_build_dataset.py \
     --source src/KF-GINS/docs/ai_gating_design/dataset_sources.yaml \
     --dataset test_demo \
     --label-profile conservative_xy
 
-  python3 src/KF-GINS/scripts/build_ai_gate_dataset.py \
+  python3 src/KF-GINS/scripts/ai_gate_build_dataset.py \
     --source src/KF-GINS/docs/ai_gating_design/dataset_sources.yaml \
     --dataset urbannav_hk_tunnel1 \
     --label-profile urban_degraded_xy

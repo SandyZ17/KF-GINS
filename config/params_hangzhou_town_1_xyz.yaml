@@ -38,7 +38,7 @@ kf_gins_node:
     # 输出/滤波
     output_enu: true
     odom_orientation_flu: true
-    filter_scheme: "ESKF" # 可切换: ESKF / UKF / SR_UKF
+    filter_scheme: "SR_UKF" # 可切换: ESKF / UKF / SR_UKF
     ukf_alpha: 0.001
     ukf_beta: 2.0
     ukf_kappa: 0.0
@@ -76,8 +76,8 @@ kf_gins_node:
     # GNSS 噪声
     # test1_bag NavSatFix covariance is overly optimistic in many epochs (cm-level),
     # which can inflate NIS. Use fixed conservative GNSS std for stable update weighting.
-    use_navsatfix_covariance: false
-    gnss_std: [3.0, 3.0, 15.0]
+    use_navsatfix_covariance: true
+    gnss_std: [0.1, 0.1, 6.0]
     gnss_pre_gate_enable: false
     gnss_pre_gate_max_hstd: -1.0
     gnss_pre_gate_max_vstd: -1.0
@@ -85,7 +85,8 @@ kf_gins_node:
     gnss_pre_gate_min_dt: 0.2
     # test1_bag: GNSS header stamp is about 0.18s behind IMU header stamp.
     # Apply positive offset so GNSS can enter the IMU update window.
-    gnss_time_offset_sec: 0.18
+    gnss_time_offset_sec: 0.10
+    gps_fix_origin_hold_sec: 5.0
     gnss_update_mode: "xyz" # UrbanNav对比常看3D/位置一致性，默认保持xyz
     gnss_nis_gate_mode: "xyz" # 当前实现要求与 gnss_update_mode 一致
     gnss_nis_gate_enable: false
@@ -113,7 +114,7 @@ kf_gins_node:
     initpos: [30.33168953713, 120.28127989875, 7.8695]
     # velocity in KF-GINS nav-frame NED => [vn, ve, vd]
     initvel: [0.0, 0.0, 0.0]
-    # attitude in KF-GINS convention [yaw, pitch, roll] [deg]
+    # attitude in KF-GINS internal convention [roll, pitch, yaw] [deg]
     initatt: [0.0, 0.0, 0.0]
 
     initgyrbias: [0.0, 0.0, 0.0] # [deg/h]
@@ -121,9 +122,12 @@ kf_gins_node:
     initgyrscale: [0.0, 0.0, 0.0] # [ppm]
     initaccscale: [0.0, 0.0, 0.0] # [ppm]
 
-    # Initial STD (test1_bag 经验值，沿用 params_dataset.yaml)
-    initposstd: [0.005, 0.004, 0.008] # [m]
-    initvelstd: [0.003, 0.004, 0.004] # [m/s]
+    # Initial STD
+    # original before tuning:
+    # initposstd: [0.005, 0.004, 0.008]
+    # initvelstd: [0.003, 0.004, 0.004]
+    initposstd: [1.0, 1.0, 1.0] # [m]
+    initvelstd: [0.3, 0.3, 0.3] # [m/s]
     initattstd: [0.003, 0.003, 0.023] # [deg]
 
     # IMU 噪声参数（由 imu_calibr_bag 估计，dt~0.01s）
@@ -140,4 +144,4 @@ kf_gins_node:
 
     # 天线杆臂 (KF-GINS expects FRD: x-forward, y-right, z-down)
     # test1_bag 经验值（与 params_dataset.yaml 一致）
-    antlever: [0.136, -0.301, -0.184] # [m]
+    antlever: [0.0, 0.0, 0.15] # [m]

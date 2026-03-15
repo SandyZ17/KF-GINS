@@ -6,6 +6,7 @@ Default behavior runs all available analyses and writes outputs under one folder
 You can also choose specific modes via --modes.
 
 Modes:
+- odom_vs_gps
 - odom_vs_truth
 - odom_compare
 - flatness
@@ -29,6 +30,34 @@ from rosidl_runtime_py.utilities import get_message
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+
+
+def read_metrics_csv(path: Path):
+    metrics = {}
+    if not path.exists():
+        return metrics
+    with path.open("r", encoding="utf-8") as f:
+        reader = csv.reader(f)
+        next(reader, None)
+        for row in reader:
+            if len(row) != 2:
+                continue
+            key, value = row
+            try:
+                metrics[key] = float(value)
+            except ValueError:
+                metrics[key] = value
+    return metrics
+
+
+def write_compare_summary(path: Path, rows):
+    if not rows:
+        return
+    fieldnames = list(rows[0].keys())
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def list_topics(bag_dir: str):
@@ -111,7 +140,7 @@ def analyze_nis(bag_dir: str, topic: str, out_dir: str, nis_mode: str = "xyz"):
     plt.grid(True, alpha=0.3)
     plt.legend(loc="best")
     plt.tight_layout()
-    fig.savefig(os.path.join(out_dir, "nis_timeseries.png"), dpi=220)
+    fig.savefig(os.path.join(out_dir, "nis_timeseries.svg"), dpi=600)
     plt.close(fig)
 
     fig, ax1 = plt.subplots(figsize=(10, 5))
@@ -128,7 +157,7 @@ def analyze_nis(bag_dir: str, topic: str, out_dir: str, nis_mode: str = "xyz"):
     ax2.set_ylabel("CDF")
     plt.title("NIS Histogram + CDF")
     plt.tight_layout()
-    fig.savefig(os.path.join(out_dir, "nis_hist_cdf.png"), dpi=220)
+    fig.savefig(os.path.join(out_dir, "nis_hist_cdf.svg"), dpi=600)
     plt.close(fig)
 
     with open(os.path.join(out_dir, "nis_metrics.csv"), "w", newline="", encoding="utf-8") as f:
@@ -165,6 +194,7 @@ def main():
     )
     parser.add_argument("--odom-pred-topic", default="/kf_gins/odom_pred")
     parser.add_argument("--odom-fused-topic", default="/kf_gins/odom_fused")
+    parser.add_argument("--gps-topic", default="/gps/fix")
     parser.add_argument("--imu-topic", default="/imu/data")
     parser.add_argument("--nis-topic", default="/kf_gins/nis")
     parser.add_argument(
@@ -189,10 +219,66 @@ def main():
     for k, v in topics.items():
         print(f"  - {k}: {v}")
 
-    all_modes = ["odom_vs_truth", "odom_compare", "flatness", "altitude", "shm", "nis"]
+    all_modes = ["odom_vs_gps", "odom_vs_truth", "odom_compare", "flatness", "altitude", "shm", "nis"]
     modes = all_modes if args.modes == "all" else [m.strip() for m in args.modes.split(",") if m.strip()]
 
     py = sys.executable
+    compare_summary_rows = []
+
+    if "odom_vs_gps" in modes:
+        gps_topic = args.gps_topic
+        if gps_topic in topics:
+            for odom_topic, label in (
+                (args.odom_pred_topic, "odom_pred_vs_raw_gps"),
+                (args.odom_fused_topic, "odom_fused_vs_raw_gps"),
+            ):
+                if odom_topic not in topics:
+                    continue
+                out_prefix = out_root / label
+                ok = run_cmd(
+                    [
+                        py,
+                        str(script_dir / "analyze_odom_vs_gps.py"),
+                        "--bag",
+                        bag,
+                        "--odom-topic",
+                        odom_topic,
+                        "--gps-topic",
+                        gps_topic,
+                        "--time-match",
+                        "nearest",
+                        "--max-time-diff",
+                        "0.2",
+                        "--out-prefix",
+                        str(out_prefix),
+                    ],
+                    f"{label} (APE/RPE)",
+                )
+                if ok:
+                    metrics = read_metrics_csv(Path(f"{out_prefix}_metrics.csv"))
+                    if metrics:
+                        compare_summary_rows.append(
+                            {
+                                "comparison": label,
+                                "odom_topic": odom_topic,
+                                "gps_topic": gps_topic,
+                                "ape_rmse_xy_m": metrics.get("ape_rmse_xy_m"),
+                                "ape_p95_xy_m": metrics.get("ape_p95_xy_m"),
+                                "ape_max_xy_m": metrics.get("ape_max_xy_m"),
+                                "ape_rmse_3d_m": metrics.get("ape_rmse_3d_m"),
+                                "rpe_delta_sec": metrics.get("rpe_delta_sec"),
+                                "rpe_rmse_xy_m": metrics.get("rpe_rmse_xy_m"),
+                                "rpe_p95_xy_m": metrics.get("rpe_p95_xy_m"),
+                                "rpe_max_xy_m": metrics.get("rpe_max_xy_m"),
+                                "rpe_rmse_3d_m": metrics.get("rpe_rmse_3d_m"),
+                                "matched_count": metrics.get("matched_count"),
+                                "ape_max_match_dt_s": metrics.get("ape_max_match_dt_s"),
+                            }
+                        )
+            if compare_summary_rows:
+                write_compare_summary(out_root / "compare_metrics_ape_rpe.csv", compare_summary_rows)
+        else:
+            print("[SKIP] odom_vs_gps (missing /gps/fix topic)")
 
     if "odom_vs_truth" in modes:
         if args.odom_pred_topic in topics and Path(args.truth_nav).exists():
@@ -234,7 +320,7 @@ def main():
                     if args.segment_end_sec is not None
                     else []
                 ),
-                "odom_pred vs truth",
+                "odom_pred vs truth (APE/RPE)",
             )
         else:
             print("[SKIP] odom_vs_truth (missing odom_pred topic or truth.nav)")
@@ -254,7 +340,7 @@ def main():
                     "--out-prefix",
                     str(out_root / "odom_fused_vs_pred"),
                 ],
-                "odom_fused vs odom_pred",
+                "odom_fused vs odom_pred (APE/RPE)",
             )
         else:
             print("[SKIP] odom_compare (missing odom topics)")
@@ -293,7 +379,7 @@ def main():
                     "hexbin",
                     "--overlay-track",
                     "--out-png",
-                    str(out_root / "altitude_heatmap.png"),
+                    str(out_root / "altitude_heatmap.svg"),
                 ],
                 "altitude heatmap",
             )
@@ -310,7 +396,7 @@ def main():
                     "--stride",
                     "6",
                     "--out-png",
-                    str(out_root / "altitude_surface3d.png"),
+                    str(out_root / "altitude_surface3d.svg"),
                 ],
                 "altitude surface3d",
             )
@@ -346,6 +432,9 @@ def main():
                 print(f"[WARN] NIS analysis failed: {e}")
         else:
             print("[SKIP] nis (missing nis topic)")
+
+    if compare_summary_rows:
+        print(f"[OK] APE/RPE compare summary: {out_root / 'compare_metrics_ape_rpe.csv'}")
 
     print(f"[DONE] Unified analysis outputs: {out_root}")
 

@@ -1,6 +1,5 @@
 kf_gins_node:
   ros__parameters:
-    # XY-only evaluation variant (GNSS horizontal-only update + 2D NIS gate mode)
     # 订阅话题
     imu_topic: "/imu/data" # sensor_msgs/Imu
     gps_topic: "/reference/inspvax/navsatfix" # sensor_msgs/NavSatFix
@@ -62,7 +61,7 @@ kf_gins_node:
     max_imu_ahead: 1.0 # 允许IMU超前GNSS处理的时间(秒), 减少1Hz GNSS导致的输出卡顿
 
     # 数据时间窗口
-    use_wall_time_stamp: false
+    use_wall_time_stamp: true
     use_absolute_time: false # 按消息时间戳过滤
     start_time: 50.0 # dataset/kf-gins.yaml 中的 starttime
     end_time: -1.0 # -1 表示不限制
@@ -78,10 +77,10 @@ kf_gins_node:
     gnss_pre_gate_max_vstd: -1.0
     gnss_pre_gate_max_speed: -1.0
     gnss_pre_gate_min_dt: 0.2
-    gnss_update_mode: "xy" # xyz / xy（地面车辆可选xy）
-    gnss_nis_gate_mode: "xy" # NIS计算维度: xyz / xy（可与 gnss_update_mode 解耦）
+    gnss_update_mode: "xyz" # xyz / xy（地面车辆可选xy）
+    gnss_nis_gate_mode: "xyz" # NIS计算维度: xyz / xy（可与 gnss_update_mode 解耦）
     gnss_nis_gate_enable: false
-    gnss_nis_gate_threshold: 9.21 # xyz模式下3D位置卡方99%门限；xy模式建议9.21
+    gnss_nis_gate_threshold: 11.34 # xyz模式下3D位置卡方99%门限；xy模式建议9.21
 
     # 自动初始化（当前demo保留手工初值，默认关闭）
     auto_init_enable: false
@@ -105,10 +104,10 @@ kf_gins_node:
     initvel: [0.0, 0.0, 0.0]
     initatt: [0.85421502, -2.03480295, 185.70235133]
 
-    initgyrbias: [0.0, 0.0, 0.0] # [deg/h]
-    initaccbias: [0.0, 0.0, 0.0] # [mGal]
-    initgyrscale: [0.0, 0.0, 0.0] # [ppm]
-    initaccscale: [0.0, 0.0, 0.0] # [ppm]
+    initgyrbias: [0.027, 0.027, 0.027] # [deg/h]
+    initaccbias: [15.0, 15.0, 15.0] # [mGal]
+    initgyrscale: [300.0, 300.0, 300.0] # [ppm]
+    initaccscale: [300.0, 300.0, 300.0] # [ppm]
 
     initposstd: [0.005, 0.004, 0.008] # [m]
     initvelstd: [0.003, 0.004, 0.004] # [m/s]

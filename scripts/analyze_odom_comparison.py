@@ -36,6 +36,16 @@ import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.ticker import MultipleLocator  # noqa: E402
 
 
+def rmse(values):
+    values = np.asarray(values, dtype=float)
+    return float(np.sqrt(np.mean(values * values)))
+
+
+def percentile(values, q):
+    values = np.asarray(values, dtype=float)
+    return float(np.percentile(values, q))
+
+
 def quat_to_rpy_deg(qx, qy, qz, qw):
     sinr_cosp = 2.0 * (qw * qx + qy * qz)
     cosr_cosp = 1.0 - 2.0 * (qx * qx + qy * qy)
@@ -197,6 +207,71 @@ def save_error_csv(path, t, ex, ey, ez, en, evx, evy, evz, evn, eroll, epitch, e
             )
 
 
+def find_nearest_index(times, target):
+    idx = np.searchsorted(times, target, side="left")
+    idx = int(np.clip(idx, 0, len(times) - 1))
+    if idx == 0:
+        return 0, abs(times[0] - target)
+    prev_idx = idx - 1
+    if abs(times[idx] - target) < abs(times[prev_idx] - target):
+        return idx, abs(times[idx] - target)
+    return prev_idx, abs(times[prev_idx] - target)
+
+
+def compute_rpe_metrics(t, ref_xyz, cmp_xyz, delta_sec, tolerance_sec):
+    xy_errors = []
+    z_errors = []
+    d3_errors = []
+    for i, t0 in enumerate(t):
+        target = t0 + delta_sec
+        if target > t[-1]:
+            break
+        j, dt = find_nearest_index(t, target)
+        if j <= i or dt > tolerance_sec:
+            continue
+        ref_rel = ref_xyz[j] - ref_xyz[i]
+        cmp_rel = cmp_xyz[j] - cmp_xyz[i]
+        err = cmp_rel - ref_rel
+        xy_errors.append(float(np.linalg.norm(err[:2])))
+        z_errors.append(abs(float(err[2])))
+        d3_errors.append(float(np.linalg.norm(err)))
+    if not xy_errors:
+        return {
+            "rpe_delta_sec": float(delta_sec),
+            "rpe_pair_count": 0,
+            "rpe_rmse_xy_m": float("inf"),
+            "rpe_p95_xy_m": float("inf"),
+            "rpe_max_xy_m": float("inf"),
+            "rpe_rmse_z_m": float("inf"),
+            "rpe_p95_abs_z_m": float("inf"),
+            "rpe_max_abs_z_m": float("inf"),
+            "rpe_rmse_3d_m": float("inf"),
+            "rpe_p95_3d_m": float("inf"),
+            "rpe_max_3d_m": float("inf"),
+        }
+    return {
+        "rpe_delta_sec": float(delta_sec),
+        "rpe_pair_count": len(xy_errors),
+        "rpe_rmse_xy_m": rmse(xy_errors),
+        "rpe_p95_xy_m": percentile(xy_errors, 95),
+        "rpe_max_xy_m": float(np.max(xy_errors)),
+        "rpe_rmse_z_m": rmse(z_errors),
+        "rpe_p95_abs_z_m": percentile(z_errors, 95),
+        "rpe_max_abs_z_m": float(np.max(z_errors)),
+        "rpe_rmse_3d_m": rmse(d3_errors),
+        "rpe_p95_3d_m": percentile(d3_errors, 95),
+        "rpe_max_3d_m": float(np.max(d3_errors)),
+    }
+
+
+def save_metrics_csv(path, metrics):
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["metric", "value"])
+        for k, v in metrics.items():
+            w.writerow([k, v])
+
+
 def main():
     parser = argparse.ArgumentParser(description="Compare two odom topics and plot 2D/3D trajectories + errors.")
     parser.add_argument(
@@ -223,6 +298,8 @@ def main():
         default=300.0,
         help="x-axis major tick spacing in seconds for error plots",
     )
+    parser.add_argument("--rpe-delta-sec", type=float, default=1.0, help="RPE delta interval [s]")
+    parser.add_argument("--rpe-tolerance-sec", type=float, default=0.15, help="RPE time matching tolerance [s]")
     args = parser.parse_args()
 
     ref_state = read_odom_state(args.bag, args.ref_topic)
@@ -231,10 +308,11 @@ def main():
         ref_state, cmp_state
     )
 
-    out_traj_2d = f"{args.out_prefix}_traj2d.png"
-    out_traj_3d = f"{args.out_prefix}_traj3d.png"
-    out_err = f"{args.out_prefix}_error.png"
+    out_traj_2d = f"{args.out_prefix}_traj2d.svg"
+    out_traj_3d = f"{args.out_prefix}_traj3d.svg"
+    out_err = f"{args.out_prefix}_error.svg"
     out_csv = f"{args.out_prefix}_error.csv"
+    out_metrics = f"{args.out_prefix}_metrics.csv"
     stride = max(1, int(args.plot_stride))
 
     fig2d = plt.figure(figsize=(8, 8))
@@ -248,7 +326,7 @@ def main():
     ax2d.axis("equal")
     ax2d.legend(loc="best")
     plt.tight_layout()
-    fig2d.savefig(out_traj_2d, dpi=180)
+    fig2d.savefig(out_traj_2d, dpi=600)
     plt.close(fig2d)
 
     fig = plt.figure(figsize=(10, 8))
@@ -262,7 +340,7 @@ def main():
     ax.grid(True)
     ax.legend(loc="best")
     plt.tight_layout()
-    fig.savefig(out_traj_3d, dpi=180)
+    fig.savefig(out_traj_3d, dpi=600)
     plt.close(fig)
 
     t_rel = t - t[0]
@@ -293,27 +371,46 @@ def main():
     tick_step = max(1.0, float(args.x_tick_seconds))
     axs[2].xaxis.set_major_locator(MultipleLocator(tick_step))
     plt.tight_layout()
-    fig2.savefig(out_err, dpi=180)
+    fig2.savefig(out_err, dpi=600)
 
     save_error_csv(out_csv, t, ex, ey, ez, en, evx, evy, evz, evn, eroll, epitch, eyaw)
+    exy = np.sqrt(ex * ex + ey * ey)
+    abs_ez = np.abs(ez)
+    ref_xyz = np.column_stack((ref_i["x"], ref_i["y"], ref_i["z"]))
+    cmp_xyz = np.column_stack((cmp_a["x"], cmp_a["y"], cmp_a["z"]))
+    ape_metrics = {
+        "aligned_count": int(len(t)),
+        "ape_rmse_xy_m": rmse(exy),
+        "ape_p95_xy_m": percentile(exy, 95),
+        "ape_max_xy_m": float(np.max(exy)),
+        "ape_rmse_z_m": rmse(abs_ez),
+        "ape_p95_abs_z_m": percentile(abs_ez, 95),
+        "ape_max_abs_z_m": float(np.max(abs_ez)),
+        "ape_rmse_3d_m": rmse(en),
+        "ape_p95_3d_m": percentile(en, 95),
+        "ape_max_3d_m": float(np.max(en)),
+        "vel_rmse_mps": rmse(evn),
+        "yaw_rmse_deg": rmse(eyaw),
+    }
+    rpe_metrics = compute_rpe_metrics(t, ref_xyz, cmp_xyz, args.rpe_delta_sec, args.rpe_tolerance_sec)
+    metrics = {**ape_metrics, **rpe_metrics}
+    save_metrics_csv(out_metrics, metrics)
 
-    pos_rmse = float(np.sqrt(np.mean(en * en)))
-    vel_rmse = float(np.sqrt(np.mean(evn * evn)))
-    att_yaw_rmse = float(np.sqrt(np.mean(eyaw * eyaw)))
-    pos_p95 = float(np.percentile(en, 95))
-    pos_max = float(np.max(en))
     print(f"bag={args.bag}")
     print(f"ref_topic={args.ref_topic}, count={len(ref_state['t'])}")
     print(f"cmp_topic={args.cmp_topic}, count={len(cmp_state['t'])}")
     print(f"aligned_count={len(t)}")
     print(
-        f"pos_rmse={pos_rmse:.4f} m, pos_p95={pos_p95:.4f} m, pos_max={pos_max:.4f} m, "
-        f"vel_rmse={vel_rmse:.4f} m/s, yaw_rmse={att_yaw_rmse:.4f} deg"
+        f"APE(xy) rmse={metrics['ape_rmse_xy_m']:.4f} m, p95={metrics['ape_p95_xy_m']:.4f} m, "
+        f"max={metrics['ape_max_xy_m']:.4f} m, "
+        f"RPE(xy,{metrics['rpe_delta_sec']:.1f}s) rmse={metrics['rpe_rmse_xy_m']:.4f} m, "
+        f"APE(3d) rmse={metrics['ape_rmse_3d_m']:.4f} m"
     )
-    print(f"traj2d_png={out_traj_2d}")
-    print(f"traj3d_png={out_traj_3d}")
-    print(f"err_png={out_err}")
+    print(f"traj2d_svg={out_traj_2d}")
+    print(f"traj3d_svg={out_traj_3d}")
+    print(f"err_svg={out_err}")
     print(f"err_csv={out_csv}")
+    print(f"metrics_csv={out_metrics}")
 
 
 if __name__ == "__main__":

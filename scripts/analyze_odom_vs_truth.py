@@ -30,6 +30,16 @@ WGS84_RA = 6378137.0
 WGS84_E1 = 0.00669437999013
 
 
+def rmse(values):
+    values = np.asarray(values, dtype=float)
+    return float(np.sqrt(np.mean(values * values)))
+
+
+def percentile(values, q):
+    values = np.asarray(values, dtype=float)
+    return float(np.percentile(values, q))
+
+
 def radiusmn(lat_rad):
     s2 = np.sin(lat_rad) ** 2
     t = 1.0 - WGS84_E1 * s2
@@ -335,6 +345,71 @@ def save_csv(path, t, ep, ev, en_pos, en_vel):
             )
 
 
+def save_metrics_csv(path, metrics):
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["metric", "value"])
+        for k, v in metrics.items():
+            w.writerow([k, v])
+
+
+def find_nearest_index(times, target):
+    idx = np.searchsorted(times, target, side="left")
+    idx = int(np.clip(idx, 0, len(times) - 1))
+    if idx == 0:
+        return 0, abs(times[0] - target)
+    prev_idx = idx - 1
+    if abs(times[idx] - target) < abs(times[prev_idx] - target):
+        return idx, abs(times[idx] - target)
+    return prev_idx, abs(times[prev_idx] - target)
+
+
+def compute_rpe_metrics(t, truth_xyz, odom_xyz, delta_sec, tolerance_sec):
+    xy_errors = []
+    z_errors = []
+    d3_errors = []
+    for i, t0 in enumerate(t):
+        target = t0 + delta_sec
+        if target > t[-1]:
+            break
+        j, dt = find_nearest_index(t, target)
+        if j <= i or dt > tolerance_sec:
+            continue
+        truth_rel = truth_xyz[j] - truth_xyz[i]
+        odom_rel = odom_xyz[j] - odom_xyz[i]
+        err = odom_rel - truth_rel
+        xy_errors.append(float(np.linalg.norm(err[:2])))
+        z_errors.append(abs(float(err[2])))
+        d3_errors.append(float(np.linalg.norm(err)))
+    if not xy_errors:
+        return {
+            "rpe_delta_sec": float(delta_sec),
+            "rpe_pair_count": 0,
+            "rpe_rmse_xy_m": float("inf"),
+            "rpe_p95_xy_m": float("inf"),
+            "rpe_max_xy_m": float("inf"),
+            "rpe_rmse_z_m": float("inf"),
+            "rpe_p95_abs_z_m": float("inf"),
+            "rpe_max_abs_z_m": float("inf"),
+            "rpe_rmse_3d_m": float("inf"),
+            "rpe_p95_3d_m": float("inf"),
+            "rpe_max_3d_m": float("inf"),
+        }
+    return {
+        "rpe_delta_sec": float(delta_sec),
+        "rpe_pair_count": len(xy_errors),
+        "rpe_rmse_xy_m": rmse(xy_errors),
+        "rpe_p95_xy_m": percentile(xy_errors, 95),
+        "rpe_max_xy_m": float(np.max(xy_errors)),
+        "rpe_rmse_z_m": rmse(z_errors),
+        "rpe_p95_abs_z_m": percentile(z_errors, 95),
+        "rpe_max_abs_z_m": float(np.max(z_errors)),
+        "rpe_rmse_3d_m": rmse(d3_errors),
+        "rpe_p95_3d_m": percentile(d3_errors, 95),
+        "rpe_max_3d_m": float(np.max(d3_errors)),
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="Compare odom topic with truth.nav in ENU frame")
     parser.add_argument("--bag", required=True, help="rosbag2 directory")
@@ -382,6 +457,8 @@ def main():
         default=None,
         help="keep only samples with (t - t0) <= this value [s]",
     )
+    parser.add_argument("--rpe-delta-sec", type=float, default=1.0, help="RPE delta interval [s]")
+    parser.add_argument("--rpe-tolerance-sec", type=float, default=0.15, help="RPE time matching tolerance [s]")
     args = parser.parse_args()
 
     if not args.out_prefix:
@@ -443,11 +520,12 @@ def main():
         en_vel = en_vel[keep]
     trt = t - t[0]
 
-    out_traj2d = f"{args.out_prefix}_vs_truth_traj2d.png"
-    out_traj2d_err = f"{args.out_prefix}_vs_truth_traj2d_error_heatmap.png"
-    out_traj = f"{args.out_prefix}_vs_truth_traj3d.png"
-    out_err = f"{args.out_prefix}_vs_truth_error.png"
+    out_traj2d = f"{args.out_prefix}_vs_truth_traj2d.svg"
+    out_traj2d_err = f"{args.out_prefix}_vs_truth_traj2d_error_heatmap.svg"
+    out_traj = f"{args.out_prefix}_vs_truth_traj3d.svg"
+    out_err = f"{args.out_prefix}_vs_truth_error.svg"
     out_csv = f"{args.out_prefix}_vs_truth_error.csv"
+    out_metrics = f"{args.out_prefix}_vs_truth_metrics.csv"
 
     fig0 = plt.figure(figsize=(8, 8))
     ax0 = fig0.add_subplot(111)
@@ -469,7 +547,7 @@ def main():
     ax0.axis("equal")
     ax0.legend(loc="best")
     plt.tight_layout()
-    fig0.savefig(out_traj2d, dpi=180)
+    fig0.savefig(out_traj2d, dpi=600)
 
     traj3d_ok = True
     try:
@@ -488,7 +566,7 @@ def main():
         ax.grid(True)
         ax.legend(loc="best")
         plt.tight_layout()
-        fig.savefig(out_traj, dpi=180)
+        fig.savefig(out_traj, dpi=600)
     except Exception as e:
         traj3d_ok = False
         print(f"[WARN] 3D trajectory plot skipped: {e}")
@@ -506,7 +584,7 @@ def main():
     axh.axis("equal")
     axh.legend(loc="best")
     plt.tight_layout()
-    figh.savefig(out_traj2d_err, dpi=180)
+    figh.savefig(out_traj2d_err, dpi=600)
 
     fig2, axs = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
     axs[0].plot(trt, ep[:, 0], label="pos_err_x")
@@ -526,9 +604,29 @@ def main():
     axs[1].grid(True)
     axs[1].legend(loc="best")
     plt.tight_layout()
-    fig2.savefig(out_err, dpi=180)
+    fig2.savefig(out_err, dpi=600)
 
     save_csv(out_csv, t, ep, ev, en_pos, en_vel)
+    exy = np.linalg.norm(ep[:, :2], axis=1)
+    abs_ez = np.abs(ep[:, 2])
+    truth_xyz = tr[:, 1:4]
+    odom_xyz = od[:, 1:4]
+    ape_metrics = {
+        "aligned_count": int(len(t)),
+        "ape_rmse_xy_m": rmse(exy),
+        "ape_p95_xy_m": percentile(exy, 95),
+        "ape_max_xy_m": float(np.max(exy)),
+        "ape_rmse_z_m": rmse(abs_ez),
+        "ape_p95_abs_z_m": percentile(abs_ez, 95),
+        "ape_max_abs_z_m": float(np.max(abs_ez)),
+        "ape_rmse_3d_m": rmse(en_pos),
+        "ape_p95_3d_m": percentile(en_pos, 95),
+        "ape_max_3d_m": float(np.max(en_pos)),
+        "vel_rmse_mps": rmse(en_vel),
+    }
+    rpe_metrics = compute_rpe_metrics(t, truth_xyz, odom_xyz, args.rpe_delta_sec, args.rpe_tolerance_sec)
+    metrics = {**ape_metrics, **rpe_metrics}
+    save_metrics_csv(out_metrics, metrics)
 
     print(f"bag={args.bag}")
     print(f"odom_topic={args.odom_topic}")
@@ -550,18 +648,21 @@ def main():
     print(f"t_truth_to_odom={t_align}")
     print(f"aligned_count={len(t)}")
     print(
-        "pos_rmse={:.4f} m, pos_p95={:.4f} m, pos_max={:.4f} m, vel_rmse={:.4f} m/s".format(
-            float(np.sqrt(np.mean(en_pos**2))),
-            float(np.percentile(en_pos, 95)),
-            float(np.max(en_pos)),
-            float(np.sqrt(np.mean(en_vel**2))),
+        "APE(xy) rmse={:.4f} m, p95={:.4f} m, max={:.4f} m, RPE(xy,{:.1f}s) rmse={:.4f} m, APE(3d) rmse={:.4f} m".format(
+            metrics["ape_rmse_xy_m"],
+            metrics["ape_p95_xy_m"],
+            metrics["ape_max_xy_m"],
+            metrics["rpe_delta_sec"],
+            metrics["rpe_rmse_xy_m"],
+            metrics["ape_rmse_3d_m"],
         )
     )
-    print(f"traj_png={out_traj if traj3d_ok else 'SKIPPED'}")
-    print(f"traj2d_png={out_traj2d}")
-    print(f"traj2d_err_png={out_traj2d_err}")
-    print(f"err_png={out_err}")
+    print(f"traj_svg={out_traj if traj3d_ok else 'SKIPPED'}")
+    print(f"traj2d_svg={out_traj2d}")
+    print(f"traj2d_err_svg={out_traj2d_err}")
+    print(f"err_svg={out_err}")
     print(f"err_csv={out_csv}")
+    print(f"metrics_csv={out_metrics}")
 
 
 if __name__ == "__main__":

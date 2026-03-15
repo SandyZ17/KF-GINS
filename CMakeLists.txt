@@ -25,11 +25,25 @@ add_executable(kf_gins_node
     src/kf-gins/insmech.cpp
 )
 
+add_executable(kf_gins_csv_replay
+    src/kf_gins_csv_replay.cpp
+    src/kf-gins/gi_engine.cpp
+    src/kf-gins/insmech.cpp
+)
+
 target_include_directories(kf_gins_node PRIVATE
     ${PROJECT_SOURCE_DIR}/src
 )
 
+target_include_directories(kf_gins_csv_replay PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+)
+
 target_link_libraries(kf_gins_node
+    Eigen3::Eigen
+)
+
+target_link_libraries(kf_gins_csv_replay
     Eigen3::Eigen
 )
 
@@ -42,7 +56,20 @@ ament_target_dependencies(kf_gins_node
     tf2_ros
 )
 
+ament_target_dependencies(kf_gins_csv_replay
+    rclcpp
+    sensor_msgs
+    nav_msgs
+    geometry_msgs
+    tf2
+    tf2_ros
+)
+
 install(TARGETS kf_gins_node
+    DESTINATION lib/${PROJECT_NAME}
+)
+
+install(TARGETS kf_gins_csv_replay
     DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -56,6 +83,11 @@ install(DIRECTORY config
 
 install(DIRECTORY launch
     DESTINATION share/${PROJECT_NAME}
+)
+
+install(PROGRAMS
+    scripts/tune_csv_replay.py
+    DESTINATION lib/${PROJECT_NAME}
 )
 
 ament_package()

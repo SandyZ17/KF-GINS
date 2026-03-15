@@ -78,7 +78,7 @@ kf_gins_node:
     gnss_pre_gate_max_speed: -1.0
     gnss_pre_gate_min_dt: 0.2
     gnss_update_mode: "xyz" # xyz / xy（地面车辆可选xy）
-    gnss_nis_gate_mode: "xyz" # 当前实现要求与 gnss_update_mode 一致
+    gnss_nis_gate_mode: "xyz" # NIS计算维度: xyz / xy（可与 gnss_update_mode 解耦）
     gnss_nis_gate_enable: false
     gnss_nis_gate_threshold: 11.34 # xyz模式下3D位置卡方99%门限；xy模式建议9.21
 

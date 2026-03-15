@@ -27,6 +27,35 @@
 #include "insmech.h"
 
 #include <cmath>
+#include <iomanip>
+#include <limits>
+#include <sstream>
+
+namespace {
+
+std::string formatGateVector(const Eigen::VectorXd &vec, int dim) {
+    std::ostringstream oss;
+    oss << "[";
+    for (int i = 0; i < dim; ++i) {
+        if (i > 0) {
+            oss << ", ";
+        }
+        oss << std::fixed << std::setprecision(3) << vec(i);
+    }
+    oss << "]";
+    return oss.str();
+}
+
+Eigen::VectorXd gateStdFromDiag(const Eigen::MatrixXd &mat, int dim) {
+    Eigen::VectorXd out(dim);
+    for (int i = 0; i < dim; ++i) {
+        const double d = mat(i, i);
+        out(i)         = (d >= 0.0) ? std::sqrt(d) : std::numeric_limits<double>::quiet_NaN();
+    }
+    return out;
+}
+
+} // namespace
 
 GIEngine::GIEngine(GINSOptions &options) {
 
@@ -485,7 +514,7 @@ void GIEngine::EKFUpdate(Eigen::MatrixXd &dz, Eigen::MatrixXd &H, Eigen::MatrixX
 
     // 计算Kalman增益
     // Compute Kalman Gain
-    auto temp = H * Cov_ * H.transpose() + R;
+    Eigen::MatrixXd temp = H * Cov_ * H.transpose() + R;
     Eigen::MatrixXd temp_inv = temp.inverse();
     Eigen::MatrixXd K        = Cov_ * H.transpose() * temp_inv;
 
@@ -498,10 +527,11 @@ void GIEngine::EKFUpdate(Eigen::MatrixXd &dz, Eigen::MatrixXd &H, Eigen::MatrixX
     // 如果每次更新后都进行状态反馈，则更新前dx_一直为0，下式可以简化为：dx_ = K * dz;
     // if state feedback is performed after every update, dx_ is always zero before the update
     // the following formula can be simplified as : dx_ = K * dz;
-    Eigen::MatrixXd innov = dz - H * dx_;
-    last_nis_             = (innov.transpose() * temp_inv * innov)(0, 0);
+    Eigen::VectorXd innov = dz - H * dx_;
+    int gate_dim          = dz.rows();
+    last_nis_             = computeNISByGateMode(innov, temp, dz.rows(), gate_dim);
     ++last_nis_seq_;
-    if (shouldRejectUpdateByNIS(last_nis_, dz.rows())) {
+    if (shouldRejectUpdateByNIS(last_nis_, gate_dim, &innov, &temp, &R)) {
         return;
     }
     dx_  = dx_ + K * innov;
@@ -555,9 +585,10 @@ void GIEngine::filterUpdate(Eigen::MatrixXd &dz, Eigen::MatrixXd &H, Eigen::Matr
         }
         Eigen::MatrixXd K = Pxz * ldlt.solve(Eigen::MatrixXd::Identity(m, m));
         Eigen::VectorXd innov = dz - z_pred;
-        last_nis_             = (innov.transpose() * ldlt.solve(innov))(0, 0);
+        int gate_dim          = m;
+        last_nis_             = computeNISByGateMode(innov, S, m, gate_dim);
         ++last_nis_seq_;
-        if (shouldRejectUpdateByNIS(last_nis_, m)) {
+        if (shouldRejectUpdateByNIS(last_nis_, gate_dim, &innov, &S, &R)) {
             break;
         }
         dx_               = dx_ + K * innov;
@@ -616,9 +647,10 @@ void GIEngine::filterUpdate(Eigen::MatrixXd &dz, Eigen::MatrixXd &H, Eigen::Matr
         }
         Eigen::MatrixXd K = Pxz * ldlt.solve(Eigen::MatrixXd::Identity(m, m));
         Eigen::VectorXd innov = dz - z_pred;
-        last_nis_             = (innov.transpose() * ldlt.solve(innov))(0, 0);
+        int gate_dim          = m;
+        last_nis_             = computeNISByGateMode(innov, Szz, m, gate_dim);
         ++last_nis_seq_;
-        if (shouldRejectUpdateByNIS(last_nis_, m)) {
+        if (shouldRejectUpdateByNIS(last_nis_, gate_dim, &innov, &Szz, &R)) {
             break;
         }
         dx_               = dx_ + K * innov;
@@ -634,26 +666,90 @@ void GIEngine::filterUpdate(Eigen::MatrixXd &dz, Eigen::MatrixXd &H, Eigen::Matr
     }
 }
 
-bool GIEngine::shouldRejectUpdateByNIS(double nis, int meas_dim) {
+bool GIEngine::shouldRejectUpdateByNIS(double nis, int meas_dim, const Eigen::VectorXd *innov, const Eigen::MatrixXd *S,
+                                       const Eigen::MatrixXd *R) {
     if (!options_.gnss_nis_gate_enable) {
         return false;
     }
+    const bool should_log = (nis_reject_count_ < 10) || (((nis_reject_count_ + 1) % 20) == 0);
     if (!std::isfinite(nis)) {
         ++nis_reject_count_;
-        std::cerr << "[GIEngine][NIS-GATE] reject non-finite NIS at t=" << std::setprecision(10) << timestamp_
-                  << " (dim=" << meas_dim << ")" << std::endl;
+        std::ostringstream oss;
+        oss << "[GIEngine][NIS-GATE] reject non-finite NIS at t=" << std::fixed << std::setprecision(3) << timestamp_
+            << " (dim=" << meas_dim << ", reject_count=" << nis_reject_count_ << ")";
+        if (should_log && innov != nullptr && innov->rows() >= meas_dim) {
+            oss << " innov=" << formatGateVector(innov->head(meas_dim), meas_dim);
+        }
+        if (should_log && S != nullptr && S->rows() >= meas_dim && S->cols() >= meas_dim) {
+            oss << " sqrtS=" << formatGateVector(gateStdFromDiag(S->topLeftCorner(meas_dim, meas_dim), meas_dim), meas_dim);
+        }
+        if (should_log && R != nullptr && R->rows() >= meas_dim && R->cols() >= meas_dim) {
+            oss << " sqrtR=" << formatGateVector(gateStdFromDiag(R->topLeftCorner(meas_dim, meas_dim), meas_dim), meas_dim);
+        }
+        std::cerr << oss.str() << std::endl;
         return true;
     }
     if (nis <= options_.gnss_nis_gate_threshold) {
         return false;
     }
     ++nis_reject_count_;
-    if (nis_reject_count_ <= 10 || (nis_reject_count_ % 20) == 0) {
-        std::cerr << "[GIEngine][NIS-GATE] reject GNSS update at t=" << std::setprecision(10) << timestamp_
-                  << " nis=" << nis << " > " << options_.gnss_nis_gate_threshold << " (dim=" << meas_dim
-                  << ", reject_count=" << nis_reject_count_ << ")" << std::endl;
+    if (should_log) {
+        std::ostringstream oss;
+        oss << "[GIEngine][NIS-GATE] reject GNSS update at t=" << std::fixed << std::setprecision(3) << timestamp_
+            << " nis=" << std::setprecision(6) << nis << " > " << options_.gnss_nis_gate_threshold
+            << " (dim=" << meas_dim << ", reject_count=" << nis_reject_count_ << ")";
+        if (innov != nullptr && innov->rows() >= meas_dim) {
+            const Eigen::VectorXd innov_gate = innov->head(meas_dim);
+            oss << " innov=" << formatGateVector(innov_gate, meas_dim)
+                << " |innov|=" << std::fixed << std::setprecision(3) << innov_gate.norm();
+        }
+        if (S != nullptr && S->rows() >= meas_dim && S->cols() >= meas_dim) {
+            const Eigen::VectorXd std_s = gateStdFromDiag(S->topLeftCorner(meas_dim, meas_dim), meas_dim);
+            oss << " sqrtS=" << formatGateVector(std_s, meas_dim);
+            if (innov != nullptr && innov->rows() >= meas_dim) {
+                Eigen::VectorXd innov_sigma = innov->head(meas_dim);
+                for (int i = 0; i < meas_dim; ++i) {
+                    const double sigma = std_s(i);
+                    innov_sigma(i)     = (std::isfinite(sigma) && sigma > 1e-9) ? innov_sigma(i) / sigma
+                                                                                 : std::numeric_limits<double>::quiet_NaN();
+                }
+                oss << " innov/sqrtS=" << formatGateVector(innov_sigma, meas_dim);
+            }
+        }
+        if (R != nullptr && R->rows() >= meas_dim && R->cols() >= meas_dim) {
+            oss << " sqrtR="
+                << formatGateVector(gateStdFromDiag(R->topLeftCorner(meas_dim, meas_dim), meas_dim), meas_dim);
+        }
+        std::cerr << oss.str() << std::endl;
     }
     return true;
+}
+
+double GIEngine::computeNISByGateMode(const Eigen::VectorXd &innov, const Eigen::MatrixXd &S, int meas_dim, int &gate_dim) const {
+    gate_dim = meas_dim;
+    if (meas_dim <= 0) {
+        return std::numeric_limits<double>::infinity();
+    }
+
+    if (options_.gnss_nis_gate_mode == GnssPosMeasMode::XY && meas_dim >= 2) {
+        gate_dim = 2;
+    } else if (options_.gnss_nis_gate_mode == GnssPosMeasMode::XYZ && meas_dim >= 3) {
+        gate_dim = 3;
+    } else {
+        gate_dim = meas_dim;
+    }
+
+    if (innov.rows() < gate_dim || S.rows() < gate_dim || S.cols() < gate_dim) {
+        return std::numeric_limits<double>::infinity();
+    }
+
+    const Eigen::VectorXd innov_gate = innov.head(gate_dim);
+    const Eigen::MatrixXd S_gate     = S.topLeftCorner(gate_dim, gate_dim);
+    Eigen::LDLT<Eigen::MatrixXd> ldlt(S_gate);
+    if (ldlt.info() != Eigen::Success) {
+        return std::numeric_limits<double>::infinity();
+    }
+    return (innov_gate.transpose() * ldlt.solve(innov_gate))(0, 0);
 }
 
 bool GIEngine::buildUkfSigmaPoints(const Eigen::VectorXd &x, const Eigen::MatrixXd &P, Eigen::MatrixXd &X,

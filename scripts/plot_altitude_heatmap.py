@@ -81,7 +81,7 @@ def plot_heatmap(
     plt.axis("equal")
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(out_png, dpi=220)
+    plt.savefig(out_png, dpi=600)
 
 
 def plot_surface3d(
@@ -108,14 +108,14 @@ def plot_surface3d(
     ax.set_zlabel("Z [m]")
     ax.view_init(elev=elev_deg, azim=azim_deg)
     plt.tight_layout()
-    fig.savefig(out_png, dpi=220)
+    fig.savefig(out_png, dpi=600)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Plot altitude heatmap from odometry topic")
     parser.add_argument("--bag", required=True, help="rosbag2 directory")
     parser.add_argument("--topic", default="/kf_gins/odom_pred", help="odometry topic")
-    parser.add_argument("--out-png", default="", help="output PNG path")
+    parser.add_argument("--out-png", default="", help="output figure path (svg recommended)")
     parser.add_argument("--stride", type=int, default=3, help="point decimation stride")
     parser.add_argument("--mode", choices=["scatter", "hexbin", "surface3d"], default="scatter", help="render mode")
     parser.add_argument("--gridsize", type=int, default=120, help="hexbin grid size")
@@ -128,7 +128,7 @@ def main() -> None:
         raise ValueError("--stride must be >= 1")
 
     if not args.out_png:
-        args.out_png = args.bag.rstrip("/").replace("/", "_") + "_altitude_heatmap.png"
+        args.out_png = args.bag.rstrip("/").replace("/", "_") + "_altitude_heatmap.svg"
 
     arr = read_odom_xyz(args.bag, args.topic)
     title = f"Altitude Heatmap ({args.topic})"
@@ -141,7 +141,7 @@ def main() -> None:
     print(f"topic={args.topic}")
     print(f"count={len(arr)}")
     print(f"z_min={arr[:,3].min():.4f} m, z_max={arr[:,3].max():.4f} m")
-    print(f"out_png={args.out_png}")
+    print(f"out_fig={args.out_png}")
 
 
 if __name__ == "__main__":

@@ -110,7 +110,7 @@ kf_gins_node:
     initpos: [22.3021422, 114.180467011111, 3.69]
     # velocity in KF-GINS nav-frame NED => [vn, ve, vd]
     initvel: [-0.007, -0.003, 0.006]
-    # attitude in KF-GINS convention [yaw, pitch, roll] [deg]
+    # attitude in KF-GINS internal convention [roll, pitch, yaw] [deg]
     initatt: [0.0318106168, 0.4630014647, -173.804169254]
 
     initgyrbias: [0.0, 0.0, 0.0] # [deg/h]

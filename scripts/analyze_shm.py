@@ -207,7 +207,7 @@ def main():
         plt.title("Road SHM Index (no odom topic)")
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    fig.savefig(os.path.join(args.out_dir, "shm_heatmap_xy.png"), dpi=220)
+    fig.savefig(os.path.join(args.out_dir, "shm_heatmap_xy.svg"), dpi=600)
     plt.close(fig)
 
     # 2) Along-track profile
@@ -220,7 +220,7 @@ def main():
     plt.grid(True, alpha=0.3)
     plt.legend(loc="best")
     plt.tight_layout()
-    fig.savefig(os.path.join(args.out_dir, "shm_profile.png"), dpi=220)
+    fig.savefig(os.path.join(args.out_dir, "shm_profile.svg"), dpi=600)
     plt.close(fig)
 
     # 3) Spectrogram
@@ -234,7 +234,7 @@ def main():
     plt.title("IMU Signal Spectrogram (detrended |a|)")
     plt.ylim(0, max(args.band_high * 2.0, 50.0))
     plt.tight_layout()
-    fig.savefig(os.path.join(args.out_dir, "shm_spectrogram.png"), dpi=220)
+    fig.savefig(os.path.join(args.out_dir, "shm_spectrogram.svg"), dpi=600)
     plt.close(fig)
 
     # 4) Event CSV
@@ -271,4 +271,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
