@@ -265,8 +265,10 @@ def calcNavresultError(navresult_filepath, refresult_filepath):
             refresult[i:, 10] = refresult[i:, 10] - 360
 
     # 找到数据重合部分，参考结果内插到测试结果
-    start_time = refresult[0, 1] if refresult[0, 1] >= navresult [0, 1] else navresult [0, 1]
-    end_time = refresult[-1, 1] if refresult[-1, 1] <= navresult [-1, 1] else navresult [-1, 1]
+    start_time = refresult[0, 1] if refresult[0,
+                                              1] >= navresult[0, 1] else navresult[0, 1]
+    end_time = refresult[-1, 1] if refresult[-1,
+                                             1] <= navresult[-1, 1] else navresult[-1, 1]
     start_index = np.argwhere(navresult[:, 1] >= start_time)[0, 0]
     end_index = np.argwhere(navresult[:, 1] <= end_time)[-1, 0]
     navresult = navresult[start_index:end_index, :]
@@ -276,7 +278,8 @@ def calcNavresultError(navresult_filepath, refresult_filepath):
     refinter = np.zeros_like(navresult)
     refinter[:, 1] = navresult[:, 1]
     for col in range(2, 11):
-        refinter[:, col] = np.interp(navresult[:, 1], refresult[:, 1], refresult[:, col])
+        refinter[:, col] = np.interp(
+            navresult[:, 1], refresult[:, 1], refresult[:, col])
 
     # 计算误差
     naverror = np.zeros_like(navresult)
@@ -294,7 +297,8 @@ def calcNavresultError(navresult_filepath, refresult_filepath):
     blh_station = navresult[0, 2:5]
     rm, rn = radiusmn(blh_station[0])
     for i in range(len(naverror)):
-        naverror[i, 2:5] = drad2dm(rm, rn, blh_station, naverror[i, 2:5]).reshape(1, 3)
+        naverror[i, 2:5] = drad2dm(
+            rm, rn, blh_station, naverror[i, 2:5]).reshape(1, 3)
 
     return naverror
 
@@ -305,9 +309,9 @@ if __name__ == '__main__':
     navresult_filepath = '../dataset/KF_GINS_Navresult.nav'
     refresult_filepath = '../dataset/truth.nav'
     # 导航结果
-    plotNavresult(navresult_filepath)
+    # plotNavresult(navresult_filepath)
     # 计算并绘制导航误差
-    # plotNavError(navresult_filepath, refresult_filepath)
+    plotNavError(navresult_filepath, refresult_filepath)
 
     # 估计的IMU误差
     imuerr_filepath = '../dataset/KF_GINS_IMU_ERR.txt'
