@@ -1,0 +1,44 @@
+# KF-GINS configuration for UrbanNav HK Deep Urban using u-blox F9P NMEA
+#
+# Source dataset:
+#   /home/sandyz/Documents/navigation/KF-GINS/dataset/urban_nav/deep_urban
+#
+# Notes:
+# - IMU is exported from the ROS bag.
+# - GNSS position input is generated from:
+#   /home/sandyz/Documents/navigation/KF-GINS/dataset/urban_nav/deep_urban/GNSS/UrbanNav-HK-Deep-Urban-1.ublox.f9p.nmea
+# - GNSS standard deviations are estimated heuristically from GGA HDOP.
+
+imupath: "/home/sandyz/Documents/navigation/KF-GINS/dataset/urban_nav/deep_urban/kf_gins_text_ublox_f9p/urbannav_imu.txt"
+gnsspath: "/home/sandyz/Documents/navigation/KF-GINS/dataset/urban_nav/deep_urban/kf_gins_text_ublox_f9p/ublox_f9p_nmea_gnss.txt"
+outputpath: "/home/sandyz/Documents/navigation/KF-GINS/dataset/urban_nav/deep_urban/kf_gins_text_ublox_f9p"
+
+imudatalen: 7
+imudatarate: 400
+
+starttime: 455342.999
+endtime: -1
+
+initpos: [ 22.30155851, 114.19030851, 2.8840 ]
+initvel: [ 0.000000, -0.006000, 0.010000 ]
+initatt: [ -0.203572, -0.631033, -59.364965 ]
+
+initgyrbias: [ 0, 0, 0 ]
+initaccbias: [ 0, 0, 0 ]
+initgyrscale: [ 0, 0, 0 ]
+initaccscale: [ 0, 0, 0 ]
+
+initposstd: [ 5.0, 5.0, 8.0 ]
+initvelstd: [ 1.0, 1.0, 1.0 ]
+initattstd: [ 1.0, 1.0, 2.0 ]
+
+imunoise:
+  arw: [0.24, 0.24, 0.24]
+  vrw: [0.24, 0.24, 0.24]
+  gbstd: [50.0, 50.0, 50.0]
+  abstd: [250.0, 250.0, 250.0]
+  gsstd: [1000.0, 1000.0, 1000.0]
+  asstd: [1000.0, 1000.0, 1000.0]
+  corrtime: 1.0
+
+antlever: [ 0.86, 0.00, 0.31 ]

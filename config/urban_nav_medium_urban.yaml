@@ -1,0 +1,51 @@
+# KF-GINS configuration for UrbanNav HK Medium Urban
+#
+# Source dataset:
+#   /home/sandyz/Documents/navigation/KF-GINS/dataset/urban_nav/medium_urban
+#
+# Notes:
+# - Generated from scripts/convert_urbannav_hk_bag.py using the bag under
+#   dataset/urban_nav/medium_urban.
+# - GNSS input comes from /novatel_data/inspvax (NovAtel SPAN solution),
+#   not from a standalone raw GNSS topic.
+# - The GNSS antenna lever arm is converted from UrbanNav extrinsic.yaml:
+#   UrbanNav uses [x right, y forward, z up]
+#   KF-GINS expects [forward, right, down]
+
+imupath: "/home/sandyz/Documents/navigation/KF-GINS/dataset/urban_nav/medium_urban/kf_gins_text/urbannav_imu.txt"
+gnsspath: "/home/sandyz/Documents/navigation/KF-GINS/dataset/urban_nav/medium_urban/kf_gins_text/urbannav_gnss.txt"
+outputpath: "/home/sandyz/Documents/navigation/KF-GINS/dataset/urban_nav/medium_urban/kf_gins_output"
+
+imudatalen: 7
+imudatarate: 401
+
+starttime: 95593.999
+endtime: -1
+
+initpos: [ 22.30119986, 114.17905711, 3.4710 ]
+initvel: [ -0.000000, -0.000000, 0.011000 ]
+initatt: [ -1.738096, 0.440868, -132.534460 ]
+
+initgyrbias: [ 0, 0, 0 ]
+initaccbias: [ 0, 0, 0 ]
+initgyrscale: [ 0, 0, 0 ]
+initaccscale: [ 0, 0, 0 ]
+
+initposstd: [ 5.0, 5.0, 8.0 ]
+initvelstd: [ 1.0, 1.0, 1.0 ]
+initattstd: [ 1.0, 1.0, 2.0 ]
+
+# xsense_imu.yaml is available in the dataset, but its noise terms have not
+# been converted here into KF-GINS units. These are conservative defaults.
+imunoise:
+  arw: [0.24, 0.24, 0.24]
+  vrw: [0.24, 0.24, 0.24]
+  gbstd: [50.0, 50.0, 50.0]
+  abstd: [250.0, 250.0, 250.0]
+  gsstd: [1000.0, 1000.0, 1000.0]
+  asstd: [1000.0, 1000.0, 1000.0]
+  corrtime: 1.0
+
+# Converted from dataset/urban_nav/medium_urban/extrinsic.yaml:
+# ANTENNA_T_IMU = [x_right, y_forward, z_up] = [0.00, 0.86, -0.31] m
+antlever: [ 0.86, 0.00, 0.31 ]
